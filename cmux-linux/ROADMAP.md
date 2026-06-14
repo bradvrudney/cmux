@@ -28,11 +28,17 @@ construction, not feature parity with the macOS app.
 - [x] **Pane sizing** — each pane measures its rendered box on mount and resizes
       its PTY + grid to fit (cell metrics derived from the font size).
 
+- [x] **Notification panel** — slide-in panel from the sidebar bell listing the
+      feed; click to jump to a pane, "mark all read"; CLI `notifications` /
+      `mark-read`. (README headline feature.)
+- [x] **Command palette** — fuzzy-searchable action list (`ctrl+shift+p`),
+      executes through the shared action path; shows bound chords.
+- [x] **Session persistence** — topology saved to `session.json` and restored on
+      startup (ids preserved); shells respawn for restored panes.
+
 ## In progress
 
-- [ ] Notification panel UI + "jump to latest unread" surfaced in the sidebar
-      (the engine action exists; needs a panel view).
-- [ ] Command palette + settings view (shortcut actions are reserved).
+- [ ] Settings view (read/edit `cmux.json` in-app; shortcut reserved).
 
 ## Planned
 

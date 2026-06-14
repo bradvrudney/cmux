@@ -9,11 +9,13 @@
 
 mod engine;
 mod keys;
+mod palette;
 mod render;
 
 use std::sync::{Arc, Mutex, OnceLock};
 
 use dioxus::desktop::{Config as DesktopConfig, WindowBuilder};
+use dioxus::events::Key;
 use dioxus::prelude::*;
 
 use cmux_config::{Config, SidebarPosition};
@@ -204,6 +206,7 @@ fn snapshot() -> Snapshot {
 fn App() -> Element {
     let mut tick = use_signal(|| 0u64);
     let mut show_notifications = use_signal(|| false);
+    let mut show_palette = use_signal(|| false);
 
     // Drive PTY output ingestion + repaint at ~30fps.
     use_future(move || async move {
@@ -251,6 +254,11 @@ fn App() -> Element {
                                 show_notifications.set(v);
                                 true
                             }
+                            "commandPalette" => {
+                                let v = !show_palette();
+                                show_palette.set(v);
+                                true
+                            }
                             "jumpToLatestNotification" => {
                                 let h = e.lock().unwrap().dispatch_action(&action);
                                 show_notifications.set(false);
@@ -282,6 +290,92 @@ fn App() -> Element {
             }
             if show_notifications() {
                 NotificationPanel { snap: snap.clone(), tick, show_notifications }
+            }
+            if show_palette() {
+                CommandPalette { tick, show_palette, show_notifications }
+            }
+        }
+    }
+}
+
+/// Execute a palette action through the same paths as keyboard shortcuts.
+/// Signals are `Copy`, so this is safe to call from multiple event closures.
+fn run_palette_action(
+    id: &str,
+    mut tick: Signal<u64>,
+    mut show_palette: Signal<bool>,
+    mut show_notifications: Signal<bool>,
+) {
+    match id {
+        "toggleNotifications" => {
+            let v = !show_notifications();
+            show_notifications.set(v);
+        }
+        _ => {
+            engine().lock().unwrap().dispatch_action(id);
+        }
+    }
+    show_palette.set(false);
+    tick += 1;
+}
+
+#[component]
+fn CommandPalette(
+    tick: Signal<u64>,
+    show_palette: Signal<bool>,
+    show_notifications: Signal<bool>,
+) -> Element {
+    let mut query = use_signal(String::new);
+    let shortcuts = {
+        let g = engine().lock().unwrap();
+        g.config.keyboard_shortcuts.clone()
+    };
+    let all = palette::all_actions(&shortcuts);
+    let results = palette::filter_actions(&query(), &all);
+    let top = results.first().map(|a| a.id.clone());
+
+    rsx! {
+        div {
+            class: "palette-backdrop",
+            onclick: move |_| show_palette.set(false),
+            div {
+                class: "palette",
+                onclick: move |evt| evt.stop_propagation(),
+                input {
+                    class: "palette-input",
+                    autofocus: true,
+                    placeholder: "Type a command…",
+                    value: "{query}",
+                    oninput: move |evt| query.set(evt.value()),
+                    onkeydown: move |evt| {
+                        match evt.key() {
+                            Key::Escape => {
+                                show_palette.set(false);
+                                evt.prevent_default();
+                            }
+                            Key::Enter => {
+                                if let Some(id) = top.clone() {
+                                    run_palette_action(&id, tick, show_palette, show_notifications);
+                                }
+                                evt.prevent_default();
+                            }
+                            _ => {}
+                        }
+                    },
+                }
+                div { class: "palette-list",
+                    for a in results.iter().cloned() {
+                        div {
+                            key: "{a.id}",
+                            class: "palette-item",
+                            onclick: move |_| run_palette_action(&a.id, tick, show_palette, show_notifications),
+                            span { class: "palette-label", "{a.label}" }
+                            if let Some(sc) = a.shortcut.clone() {
+                                span { class: "palette-chord", "{sc}" }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -567,4 +661,25 @@ html, body, #main, .app { height: 100%; margin: 0; }
 .notif-item.read { border-left-color: transparent; opacity: 0.7; }
 .notif-title { font-size: 13px; font-weight: 600; }
 .notif-body { font-size: 12px; color: #a6adc8; }
+.palette-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    display: flex; justify-content: center; align-items: flex-start; z-index: 60;
+}
+.palette {
+    margin-top: 12vh; width: 520px; max-width: 90vw; background: #1e1e2e;
+    border: 1px solid #45475a; border-radius: 10px; overflow: hidden;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+}
+.palette-input {
+    width: 100%; border: none; outline: none; background: #181825;
+    color: #cdd6f4; font-size: 15px; padding: 14px 16px;
+    border-bottom: 1px solid #313244;
+}
+.palette-list { max-height: 50vh; overflow-y: auto; }
+.palette-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; cursor: pointer; font-size: 13px;
+}
+.palette-item:hover { background: #313244; }
+.palette-chord { color: #6c7086; font-size: 11px; font-family: monospace; }
 "#;
