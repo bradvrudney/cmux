@@ -116,6 +116,107 @@ pub fn key_event_to_bytes(key: &Key, mods: Modifiers) -> Option<Vec<u8>> {
     }
 }
 
+/// Canonicalize a chord string into `ctrl+alt+shift+super+key` order with
+/// normalized modifier and key names, so user-written and event-derived chords
+/// compare equal regardless of spelling or ordering.
+pub fn normalize_chord(chord: &str) -> String {
+    let mut ctrl = false;
+    let mut alt = false;
+    let mut shift = false;
+    let mut sup = false;
+    let mut key = String::new();
+    for part in chord.split('+').map(|s| s.trim().to_ascii_lowercase()) {
+        match part.as_str() {
+            "ctrl" | "control" => ctrl = true,
+            "alt" | "option" => alt = true,
+            "shift" => shift = true,
+            "super" | "cmd" | "command" | "meta" | "win" => sup = true,
+            "" => {}
+            other => key = normalize_key_token(other),
+        }
+    }
+    assemble(ctrl, alt, shift, sup, &key)
+}
+
+fn normalize_key_token(k: &str) -> String {
+    match k {
+        "," => "comma".into(),
+        "." => "period".into(),
+        "/" => "slash".into(),
+        ";" => "semicolon".into(),
+        "return" | "cr" => "enter".into(),
+        "esc" => "escape".into(),
+        "bs" => "backspace".into(),
+        "del" => "delete".into(),
+        other => other.to_string(),
+    }
+}
+
+fn assemble(ctrl: bool, alt: bool, shift: bool, sup: bool, key: &str) -> String {
+    let mut parts = Vec::new();
+    if ctrl {
+        parts.push("ctrl");
+    }
+    if alt {
+        parts.push("alt");
+    }
+    if shift {
+        parts.push("shift");
+    }
+    if sup {
+        parts.push("super");
+    }
+    parts.push(key);
+    parts.join("+")
+}
+
+/// Derive the canonical chord for a live key event, or `None` for bare modifier
+/// presses (which shouldn't trigger shortcuts on their own).
+pub fn event_to_chord(key: &Key, mods: Modifiers) -> Option<String> {
+    let token = match key {
+        Key::Character(s) => {
+            let c = s.chars().next()?;
+            if c.is_whitespace() {
+                return None;
+            }
+            normalize_key_token(&c.to_ascii_lowercase().to_string())
+        }
+        Key::Enter => "enter".into(),
+        Key::Tab => "tab".into(),
+        Key::Escape => "escape".into(),
+        Key::Backspace => "backspace".into(),
+        Key::Delete => "delete".into(),
+        Key::ArrowUp => "up".into(),
+        Key::ArrowDown => "down".into(),
+        Key::ArrowLeft => "left".into(),
+        Key::ArrowRight => "right".into(),
+        Key::Home => "home".into(),
+        Key::End => "end".into(),
+        Key::PageUp => "pageup".into(),
+        Key::PageDown => "pagedown".into(),
+        _ => return None,
+    };
+    Some(assemble(
+        mods.ctrl(),
+        mods.alt(),
+        mods.shift(),
+        mods.meta(),
+        &token,
+    ))
+}
+
+/// Find the action id whose configured chord matches `chord` (both normalized).
+pub fn resolve_action<'a>(
+    chord: &str,
+    shortcuts: &'a std::collections::BTreeMap<String, String>,
+) -> Option<&'a str> {
+    let target = normalize_chord(chord);
+    shortcuts
+        .iter()
+        .find(|(_, bound)| normalize_chord(bound) == target)
+        .map(|(action, _)| action.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +274,55 @@ mod tests {
         assert_eq!(
             key_event_to_bytes(&Key::ArrowUp, Modifiers::empty()),
             Some(vec![0x1b, b'[', b'A'])
+        );
+    }
+
+    #[test]
+    fn normalize_orders_modifiers_and_aliases() {
+        assert_eq!(normalize_chord("shift+ctrl+d"), "ctrl+shift+d");
+        assert_eq!(normalize_chord("Control+Shift+D"), "ctrl+shift+d");
+        assert_eq!(normalize_chord("cmd+,"), "super+comma");
+        assert_eq!(normalize_chord("ctrl+comma"), "ctrl+comma");
+    }
+
+    #[test]
+    fn event_chord_matches_stored() {
+        // ctrl+shift+d arrives as Character("D") (or "d") with ctrl+shift.
+        let chord = event_to_chord(
+            &Key::Character("D".into()),
+            Modifiers::CONTROL | Modifiers::SHIFT,
+        )
+        .unwrap();
+        assert_eq!(chord, "ctrl+shift+d");
+    }
+
+    #[test]
+    fn resolve_action_finds_configured_binding() {
+        let shortcuts = cmux_config::default_shortcuts();
+        // ctrl+shift+d -> splitHorizontal in defaults.
+        let chord = event_to_chord(
+            &Key::Character("d".into()),
+            Modifiers::CONTROL | Modifiers::SHIFT,
+        )
+        .unwrap();
+        assert_eq!(resolve_action(&chord, &shortcuts), Some("splitHorizontal"));
+        // ctrl+tab -> nextTab.
+        let chord = event_to_chord(&Key::Tab, Modifiers::CONTROL).unwrap();
+        assert_eq!(resolve_action(&chord, &shortcuts), Some("nextTab"));
+    }
+
+    #[test]
+    fn resolve_action_none_for_unbound() {
+        let shortcuts = cmux_config::default_shortcuts();
+        let chord = event_to_chord(&Key::Character("q".into()), Modifiers::empty()).unwrap();
+        assert_eq!(resolve_action(&chord, &shortcuts), None);
+    }
+
+    #[test]
+    fn bare_character_has_no_modifier() {
+        assert_eq!(
+            event_to_chord(&Key::Character("a".into()), Modifiers::empty()),
+            Some("a".to_string())
         );
     }
 }

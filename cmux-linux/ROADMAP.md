@@ -17,17 +17,26 @@ construction, not feature parity with the macOS app.
 - [x] **cmux-cli** — the `cmux` CLI driving the app over the socket.
 - [x] **packaging** — RPM spec, `.desktop`, systemd user unit, icon, build script.
 
+- [x] **cmux-gui** — Dioxus desktop shell: sidebar with vertical tabs +
+      notification badges, split-pane layout, live terminal widget. Wires
+      PTY → terminal grid → DOM and forwards input.
+- [x] Control socket hosted by the GUI (so the CLI drives the live app).
+- [x] **Keyboard-shortcut binding from `cmux.json`** — live key events are
+      normalized to chords, matched against the configured shortcut map, and
+      dispatched through the same `Engine` actions the CLI uses (split, close,
+      new tab/workspace, focus directions, reopen tab, jump to latest unread).
+- [x] **Pane sizing** — each pane measures its rendered box on mount and resizes
+      its PTY + grid to fit (cell metrics derived from the font size).
+
 ## In progress
 
-- [ ] **cmux-gui** — Dioxus desktop shell: sidebar with vertical tabs +
-      notification badges, split-pane layout, live terminal widget, command
-      palette, settings. Wires PTY → terminal grid → DOM and forwards input.
-- [ ] Control socket hosted by the GUI (so the CLI drives the live app).
+- [ ] Notification panel UI + "jump to latest unread" surfaced in the sidebar
+      (the engine action exists; needs a panel view).
+- [ ] Command palette + settings view (shortcut actions are reserved).
 
 ## Planned
 
-- [ ] Keyboard-shortcut binding from `cmux.json` in the GUI.
-- [ ] Notification panel UI + "jump to latest unread".
+- [ ] Re-measure panes on window/divider resize (currently measured on mount).
 - [ ] Pane drag-to-reorder and divider drag-to-resize.
 - [ ] Session persistence / restore across restarts.
 - [ ] Agent hooks parity (notification triggers from coding-agent lifecycle).

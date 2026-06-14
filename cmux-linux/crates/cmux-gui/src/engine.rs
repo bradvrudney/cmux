@@ -192,6 +192,81 @@ impl Engine {
         ok
     }
 
+    /// Resize a pane's PTY and terminal grid to the given dimensions.
+    pub fn resize_pane(&mut self, pane: PaneId, rows: u16, cols: u16) -> bool {
+        let rows = rows.max(1);
+        let cols = cols.max(1);
+        match self.runtimes.get_mut(&pane) {
+            Some(rt) => {
+                let _ = rt.pty.resize(rows, cols);
+                rt.term.resize(rows as usize, cols as usize);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn close_focused_pane(&mut self) -> bool {
+        match self.state.focused_pane() {
+            Some(p) => self.close_pane(p),
+            None => false,
+        }
+    }
+
+    fn close_active_tab(&mut self) -> bool {
+        let target = self
+            .state
+            .active_workspace()
+            .and_then(|w| w.active_tab.map(|t| (w.id, t)));
+        match target {
+            Some((ws, tab)) => {
+                let ok = self.state.close_tab(ws, tab);
+                self.ensure_runtimes();
+                ok
+            }
+            None => false,
+        }
+    }
+
+    fn reopen_closed_tab(&mut self) -> bool {
+        let ok = self.state.reopen_closed_tab().is_some();
+        self.ensure_runtimes();
+        ok
+    }
+
+    /// Focus the pane of the most recent unread notification ("jump to latest").
+    fn focus_latest_unread(&mut self) -> bool {
+        match self.state.notifications.latest_unread().map(|n| n.pane) {
+            Some(pane) => self.state.focus_pane(pane),
+            None => false,
+        }
+    }
+
+    /// Dispatch a configured keyboard-shortcut action id onto the model. Returns
+    /// `true` if the action mutated state. UI-only actions (command palette,
+    /// settings, notification panel) are handled by the GUI, not here, so this
+    /// returns `false` for them.
+    pub fn dispatch_action(&mut self, action: &str) -> bool {
+        match action {
+            "newTab" => self.new_tab().is_some(),
+            "closeTab" => self.close_active_tab(),
+            "newWorkspace" => {
+                self.new_workspace("workspace");
+                true
+            }
+            "splitHorizontal" => self.split_focused(Orientation::Horizontal).is_some(),
+            "splitVertical" => self.split_focused(Orientation::Vertical).is_some(),
+            "closePane" => self.close_focused_pane(),
+            "focusLeft" => self.state.focus_dir(FocusDir::Left),
+            "focusRight" => self.state.focus_dir(FocusDir::Right),
+            "focusUp" => self.state.focus_dir(FocusDir::Up),
+            "focusDown" => self.state.focus_dir(FocusDir::Down),
+            "reopenClosedTab" => self.reopen_closed_tab(),
+            "jumpToLatestNotification" => self.focus_latest_unread(),
+            _ => false,
+        }
+    }
+
     // ---- control socket dispatch ---------------------------------------
 
     /// Map an IPC [`Request`] onto engine operations. Used by the socket server
@@ -396,6 +471,64 @@ mod tests {
             Response::ConfigValue { value } => assert_eq!(value, serde_json::json!("dark")),
             other => panic!("expected ConfigValue, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn dispatch_split_and_close_actions() {
+        let mut e = engine();
+        assert_eq!(e.active_layout().len(), 1);
+        assert!(e.dispatch_action("splitVertical"));
+        assert_eq!(e.active_layout().len(), 2);
+        assert!(e.dispatch_action("closePane"));
+        assert_eq!(e.active_layout().len(), 1);
+    }
+
+    #[test]
+    fn dispatch_tab_actions_and_reopen() {
+        let mut e = engine();
+        let ws = e.state.active_workspace.unwrap();
+        assert!(e.dispatch_action("newTab"));
+        assert_eq!(e.state.workspace(ws).unwrap().tabs.len(), 2);
+        assert!(e.dispatch_action("closeTab"));
+        assert_eq!(e.state.workspace(ws).unwrap().tabs.len(), 1);
+        assert!(e.dispatch_action("reopenClosedTab"));
+        assert_eq!(e.state.workspace(ws).unwrap().tabs.len(), 2);
+    }
+
+    #[test]
+    fn dispatch_focus_directions() {
+        let mut e = engine();
+        let left = e.state.focused_pane().unwrap();
+        let right = e.split_focused(Orientation::Horizontal).unwrap();
+        assert_eq!(e.state.focused_pane(), Some(right));
+        assert!(e.dispatch_action("focusLeft"));
+        assert_eq!(e.state.focused_pane(), Some(left));
+    }
+
+    #[test]
+    fn dispatch_unknown_action_is_noop() {
+        let mut e = engine();
+        assert!(!e.dispatch_action("commandPalette"));
+        assert!(!e.dispatch_action("totallyMadeUp"));
+    }
+
+    #[test]
+    fn resize_pane_succeeds_for_live_pane() {
+        let mut e = engine();
+        let p = e.state.focused_pane().unwrap();
+        assert!(e.resize_pane(p, 40, 120));
+        assert_eq!(e.terminal(p).unwrap().rows(), 40);
+        assert_eq!(e.terminal(p).unwrap().cols(), 120);
+    }
+
+    #[test]
+    fn jump_to_latest_unread_focuses_pane() {
+        let mut e = engine();
+        let bg = e.state.active_workspace().unwrap().tabs[0].focused.unwrap();
+        e.new_tab(); // move focus away so bg is unfocused
+        e.state.notify(bg, "Claude", "ping", 1);
+        assert!(e.dispatch_action("jumpToLatestNotification"));
+        assert_eq!(e.state.focused_pane(), Some(bg));
     }
 
     #[test]

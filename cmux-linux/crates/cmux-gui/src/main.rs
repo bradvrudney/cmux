@@ -209,13 +209,37 @@ fn App() -> Element {
             tabindex: "0",
             autofocus: true,
             onkeydown: move |evt| {
-                if let Some(bytes) = keys::key_event_to_bytes(&evt.key(), evt.modifiers()) {
-                    if let Some(e) = ENGINE.get() {
-                        let wrote = e.lock().unwrap().write_focused(&bytes);
-                        if wrote {
+                let Some(e) = ENGINE.get() else { return };
+                let key = evt.key();
+                let mods = evt.modifiers();
+                // 1) A configured cmux shortcut takes precedence over typing.
+                if let Some(chord) = keys::event_to_chord(&key, mods) {
+                    let action = {
+                        let g = e.lock().unwrap();
+                        keys::resolve_action(&chord, &g.config.keyboard_shortcuts)
+                            .map(|a| a.to_string())
+                    };
+                    if let Some(action) = action {
+                        let mut g = e.lock().unwrap();
+                        // Model actions go through the engine; UI-only actions
+                        // (palette/settings/notifications) toggle local view state.
+                        let handled = g.dispatch_action(&action) || matches!(
+                            action.as_str(),
+                            "commandPalette" | "openSettings" | "toggleNotifications"
+                        );
+                        drop(g);
+                        if handled {
                             evt.prevent_default();
                             tick += 1;
+                            return;
                         }
+                    }
+                }
+                // 2) Otherwise, type into the focused pane's PTY.
+                if let Some(bytes) = keys::key_event_to_bytes(&key, mods) {
+                    if e.lock().unwrap().write_focused(&bytes) {
+                        evt.prevent_default();
+                        tick += 1;
                     }
                 }
             },
@@ -326,6 +350,21 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                             div {
                                 class: "grid",
                                 style: "font-size:{font}px;",
+                                onmounted: move |evt| {
+                                    // Size the PTY/grid to the rendered pane using
+                                    // monospace cell metrics derived from the font.
+                                    let char_w = (font as f64) * 0.6;
+                                    let line_h = (font as f64) * 1.3;
+                                    async move {
+                                        if let Ok(rect) = evt.data().get_client_rect().await {
+                                            let cols = (rect.width() / char_w).floor().max(1.0) as u16;
+                                            let rows = (rect.height() / line_h).floor().max(1.0) as u16;
+                                            if let Some(e) = ENGINE.get() {
+                                                e.lock().unwrap().resize_pane(pid, rows, cols);
+                                            }
+                                        }
+                                    }
+                                },
                                 for (ri, runs) in p.rows.iter().enumerate() {
                                     div { key: "{ri}", class: "row",
                                         for (ci, run) in runs.iter().enumerate() {
