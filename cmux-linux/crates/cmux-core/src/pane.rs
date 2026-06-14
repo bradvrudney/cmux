@@ -5,11 +5,11 @@ use serde::{Deserialize, Serialize};
 use crate::ids::PaneId;
 use crate::notification::RingState;
 
-/// What a pane hosts. Today only terminals; kept as an enum so a browser pane
-/// (upstream's WKWebView surface) can be added without touching call sites.
+/// What a pane hosts: a terminal (PTY-backed) or a browser (webview-backed).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PaneKind {
     Terminal { command: Option<String> },
+    Browser { url: String },
 }
 
 impl Default for PaneKind {
@@ -35,6 +35,28 @@ impl Pane {
             cwd: None,
             kind: PaneKind::default(),
             ring: RingState::Idle,
+        }
+    }
+
+    pub fn browser(id: PaneId, url: impl Into<String>) -> Self {
+        Self {
+            id,
+            title: String::from("browser"),
+            cwd: None,
+            kind: PaneKind::Browser { url: url.into() },
+            ring: RingState::Idle,
+        }
+    }
+
+    pub fn is_browser(&self) -> bool {
+        matches!(self.kind, PaneKind::Browser { .. })
+    }
+
+    /// The browser URL, if this is a browser pane.
+    pub fn browser_url(&self) -> Option<&str> {
+        match &self.kind {
+            PaneKind::Browser { url } => Some(url),
+            _ => None,
         }
     }
 }

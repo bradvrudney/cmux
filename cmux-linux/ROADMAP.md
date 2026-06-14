@@ -53,6 +53,9 @@ construction, not feature parity with the macOS app.
       with correct cursor advance, edge wrapping, and snapshot text.
 - [x] **System theme follows the OS** — the `system` theme uses
       `prefers-color-scheme` (honored by WebKitGTK), light or dark to match.
+- [x] **In-app browser pane** — split a webview browser alongside terminals
+      (`ctrl+shift+b` / `cmux browser <url>`), with a URL bar and `cmux navigate`.
+      A scriptable browser API remains a follow-up.
 
 ## In progress
 
@@ -62,7 +65,8 @@ construction, not feature parity with the macOS app.
 
 - [ ] Pane drag-to-reorder and divider drag-to-resize (mouse-driven; the engine
       ops `reorder_tab`/`set_ratio_for` exist and are scriptable via the CLI).
-- [ ] In-app browser pane (needs nested webview wiring).
+- [ ] Scriptable browser API (upstream's agent-browser port) on top of the
+      browser pane.
 
 ## Out of scope (no Linux equivalent / deliberately dropped for v1)
 

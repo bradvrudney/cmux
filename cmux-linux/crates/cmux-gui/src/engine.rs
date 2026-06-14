@@ -125,6 +125,10 @@ impl Engine {
             if self.runtimes.contains_key(&pane) {
                 continue;
             }
+            // Browser panes are webview-backed and have no PTY.
+            if self.state.pane(pane).map_or(false, |p| p.is_browser()) {
+                continue;
+            }
             if let Some(rt) = self.spawn_runtime() {
                 self.runtimes.insert(pane, rt);
             }
@@ -272,6 +276,18 @@ impl Engine {
         ok
     }
 
+    /// Split the focused pane into a browser pane showing `url`.
+    pub fn open_browser(&mut self, url: &str, orientation: Orientation) -> Option<PaneId> {
+        let id = self.state.split_focused_browser(url, orientation);
+        self.ensure_runtimes();
+        id
+    }
+
+    /// Navigate an existing browser pane to `url`.
+    pub fn navigate_browser(&mut self, pane: PaneId, url: &str) -> bool {
+        self.state.set_browser_url(pane, url)
+    }
+
     /// Resize a pane's PTY and terminal grid to the given dimensions.
     pub fn resize_pane(&mut self, pane: PaneId, rows: u16, cols: u16) -> bool {
         let rows = rows.max(1);
@@ -336,6 +352,9 @@ impl Engine {
             }
             "splitHorizontal" => self.split_focused(Orientation::Horizontal).is_some(),
             "splitVertical" => self.split_focused(Orientation::Vertical).is_some(),
+            "openBrowser" => self
+                .open_browser("https://example.com", Orientation::Horizontal)
+                .is_some(),
             "closePane" => self.close_focused_pane(),
             "focusLeft" => self.state.focus_dir(FocusDir::Left),
             "focusRight" => self.state.focus_dir(FocusDir::Right),
@@ -454,6 +473,9 @@ impl Engine {
                 Some(t) => Response::Snapshot {
                     text: t.render_to_string(),
                 },
+                None if self.state.pane(pane).map_or(false, |p| p.is_browser()) => {
+                    Response::error("pane is a browser, not a terminal")
+                }
                 None => Response::error("no such pane"),
             },
             Request::GetConfig { path } => match path {
@@ -501,6 +523,19 @@ impl Engine {
                     Response::Ok
                 } else {
                     Response::error("no such pane")
+                }
+            }
+            Request::OpenBrowser { url, orientation } => {
+                match self.open_browser(&url, orientation.into()) {
+                    Some(id) => Response::Created { id: id.raw() },
+                    None => Response::error("could not open browser"),
+                }
+            }
+            Request::NavigateBrowser { pane, url } => {
+                if self.navigate_browser(pane, &url) {
+                    Response::Ok
+                } else {
+                    Response::error("not a browser pane")
                 }
             }
         }
@@ -723,6 +758,32 @@ mod tests {
             }
         }
         assert!(titled, "OSC title did not update the pane title");
+    }
+
+    #[test]
+    fn open_browser_pane_has_no_pty_runtime() {
+        let mut e = engine();
+        let id = e
+            .handle_request(Request::OpenBrowser {
+                url: "https://example.com".into(),
+                orientation: SplitDir::Horizontal,
+            });
+        let id = match id {
+            Response::Created { id } => PaneId(id),
+            other => panic!("expected Created, got {other:?}"),
+        };
+        assert!(e.state.pane(id).unwrap().is_browser());
+        // Browser panes are webview-backed: no terminal runtime is spawned.
+        assert!(e.terminal(id).is_none());
+        // Navigation updates the URL.
+        assert!(matches!(
+            e.handle_request(Request::NavigateBrowser {
+                pane: id,
+                url: "https://docs.rs".into()
+            }),
+            Response::Ok
+        ));
+        assert_eq!(e.state.pane(id).unwrap().browser_url(), Some("https://docs.rs"));
     }
 
     #[test]

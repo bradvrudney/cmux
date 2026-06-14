@@ -17,6 +17,7 @@ pub fn default_shortcuts() -> BTreeMap<String, String> {
         ("newWorkspace", "ctrl+shift+n"),
         ("splitHorizontal", "ctrl+shift+d"),
         ("splitVertical", "ctrl+shift+e"),
+        ("openBrowser", "ctrl+shift+b"),
         ("closePane", "ctrl+shift+x"),
         ("focusLeft", "ctrl+alt+left"),
         ("focusRight", "ctrl+alt+right"),

@@ -214,6 +214,31 @@ impl AppState {
         }
     }
 
+    /// Split the focused pane into a new browser pane showing `url`.
+    pub fn split_focused_browser(
+        &mut self,
+        url: impl Into<String>,
+        orientation: Orientation,
+    ) -> Option<PaneId> {
+        let id = self.split_focused(orientation)?;
+        if let Some(p) = self.panes.get_mut(&id) {
+            *p = crate::pane::Pane::browser(id, url);
+        }
+        Some(id)
+    }
+
+    /// Navigate a browser pane to `url`. Returns `false` if the pane isn't a
+    /// browser pane (or doesn't exist).
+    pub fn set_browser_url(&mut self, pane: PaneId, url: impl Into<String>) -> bool {
+        match self.panes.get_mut(&pane) {
+            Some(p) if p.is_browser() => {
+                p.kind = crate::pane::PaneKind::Browser { url: url.into() };
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Close a pane. If its tab becomes empty the tab is closed too.
     pub fn close_pane(&mut self, pane: PaneId) -> bool {
         let Some((ws, tab)) = self.locate_pane(pane) else {
@@ -483,6 +508,24 @@ mod tests {
         assert!(s.focus_pane(bg_pane));
         assert_eq!(s.pane(bg_pane).unwrap().ring, RingState::Idle);
         assert_eq!(s.notifications.unread_count(), 0);
+    }
+
+    #[test]
+    fn split_into_browser_pane_and_navigate() {
+        let (mut s, _ws) = seeded();
+        let b = s.split_focused_browser("https://example.com", Orientation::Horizontal).unwrap();
+        assert!(s.pane(b).unwrap().is_browser());
+        assert_eq!(s.pane(b).unwrap().browser_url(), Some("https://example.com"));
+        assert_eq!(s.focused_pane(), Some(b));
+        assert!(s.set_browser_url(b, "https://docs.rs"));
+        assert_eq!(s.pane(b).unwrap().browser_url(), Some("https://docs.rs"));
+    }
+
+    #[test]
+    fn set_browser_url_rejects_terminal_pane() {
+        let (mut s, _ws) = seeded();
+        let term = s.focused_pane().unwrap();
+        assert!(!s.set_browser_url(term, "https://x"));
     }
 
     #[test]

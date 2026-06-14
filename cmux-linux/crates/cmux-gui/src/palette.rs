@@ -19,6 +19,7 @@ pub fn all_actions(shortcuts: &BTreeMap<String, String>) -> Vec<PaletteAction> {
     const DEFS: &[(&str, &str)] = &[
         ("splitHorizontal", "Split pane horizontally"),
         ("splitVertical", "Split pane vertically"),
+        ("openBrowser", "Open browser pane"),
         ("closePane", "Close pane"),
         ("newTab", "New tab"),
         ("closeTab", "Close tab"),

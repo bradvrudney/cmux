@@ -36,6 +36,8 @@ COMMANDS:
     rename-workspace <ws> <title>     Rename a workspace
     reorder-tab <tab> <index>         Move a tab within its workspace
     resize <pane> <rows> <cols>       Resize a pane's PTY/grid
+    browser <url> [vertical]          Split into a browser pane
+    navigate <pane> <url>             Point a browser pane at a URL
     config get [path]                 Read config (whole tree or dotted path)
     config set <path> <value>         Set a config value
 
@@ -151,6 +153,22 @@ fn parse(args: &[String]) -> Result<Option<Request>, String> {
             Request::ReorderTab {
                 tab: TabId(parse_id(tab)?),
                 index,
+            }
+        }
+        "browser" => {
+            let url = rest.first().ok_or("browser requires a URL")?.clone();
+            let orientation = match rest.get(1).map(String::as_str) {
+                Some("vertical") | Some("v") => SplitDir::Vertical,
+                _ => SplitDir::Horizontal,
+            };
+            Request::OpenBrowser { url, orientation }
+        }
+        "navigate" => {
+            let pane = rest.first().ok_or("navigate requires a pane id")?;
+            let url = rest.get(1).ok_or("navigate requires a URL")?.clone();
+            Request::NavigateBrowser {
+                pane: PaneId(parse_id(pane)?),
+                url,
             }
         }
         "resize" => {
@@ -515,6 +533,25 @@ mod tests {
             })
         );
         assert!(parse(&argv(&["rename-tab", "tab:3"])).is_err());
+    }
+
+    #[test]
+    fn browser_and_navigate() {
+        assert_eq!(
+            parse(&argv(&["browser", "https://example.com"])).unwrap(),
+            Some(Request::OpenBrowser {
+                url: "https://example.com".into(),
+                orientation: SplitDir::Horizontal
+            })
+        );
+        assert_eq!(
+            parse(&argv(&["navigate", "surface:4", "https://docs.rs"])).unwrap(),
+            Some(Request::NavigateBrowser {
+                pane: PaneId(4),
+                url: "https://docs.rs".into()
+            })
+        );
+        assert!(parse(&argv(&["browser"])).is_err());
     }
 
     #[test]

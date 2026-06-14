@@ -94,6 +94,10 @@ pub enum Request {
     ReorderTab { tab: TabId, index: usize },
     /// Resize a pane's PTY/grid (rows × cols).
     ResizePane { pane: PaneId, rows: u16, cols: u16 },
+    /// Split the focused pane into a browser pane showing `url`.
+    OpenBrowser { url: String, orientation: SplitDir },
+    /// Navigate an existing browser pane to `url`.
+    NavigateBrowser { pane: PaneId, url: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

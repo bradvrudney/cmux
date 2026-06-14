@@ -92,6 +92,8 @@ struct PaneView {
     ring: RingState,
     alive: bool,
     rows: Vec<Vec<render::StyledRun>>,
+    /// `Some(url)` for a browser pane; `None` for a terminal pane.
+    browser_url: Option<String>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -175,6 +177,7 @@ fn snapshot() -> Snapshot {
                 .terminal(id)
                 .map(render::rows_to_runs)
                 .unwrap_or_default(),
+            browser_url: e.state.pane(id).and_then(|p| p.browser_url().map(String::from)),
         })
         .collect();
 
@@ -667,40 +670,54 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                                 engine().lock().unwrap().state.focus_pane(pid);
                                 tick += 1;
                             },
-                            div {
-                                class: "grid",
-                                style: "font-size:{font}px;",
-                                onmounted: move |evt| {
-                                    // Size the PTY/grid to the rendered pane using
-                                    // monospace cell metrics derived from the font.
-                                    let char_w = (font as f64) * 0.6;
-                                    let line_h = (font as f64) * 1.3;
-                                    async move {
-                                        if let Ok(rect) = evt.data().get_client_rect().await {
-                                            let cols = (rect.width() / char_w).floor().max(1.0) as u16;
-                                            let rows = (rect.height() / line_h).floor().max(1.0) as u16;
+                            if let Some(url) = p.browser_url.clone() {
+                                div { class: "browser",
+                                    input {
+                                        class: "browser-url",
+                                        value: "{url}",
+                                        onchange: move |evt| {
+                                            engine().lock().unwrap().navigate_browser(pid, &evt.value());
+                                            tick += 1;
+                                        },
+                                    }
+                                    iframe { class: "browser-frame", src: "{url}" }
+                                }
+                            } else {
+                                div {
+                                    class: "grid",
+                                    style: "font-size:{font}px;",
+                                    onmounted: move |evt| {
+                                        // Size the PTY/grid to the rendered pane using
+                                        // monospace cell metrics derived from the font.
+                                        let char_w = (font as f64) * 0.6;
+                                        let line_h = (font as f64) * 1.3;
+                                        async move {
+                                            if let Ok(rect) = evt.data().get_client_rect().await {
+                                                let cols = (rect.width() / char_w).floor().max(1.0) as u16;
+                                                let rows = (rect.height() / line_h).floor().max(1.0) as u16;
+                                                if let Some(e) = ENGINE.get() {
+                                                    e.lock().unwrap().resize_pane(pid, rows, cols);
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onresize: move |evt| {
+                                        // Track window/divider resizes so the PTY matches the view.
+                                        let char_w = (font as f64) * 0.6;
+                                        let line_h = (font as f64) * 1.3;
+                                        if let Ok(size) = evt.get_content_box_size() {
+                                            let cols = (size.width / char_w).floor().max(1.0) as u16;
+                                            let rows = (size.height / line_h).floor().max(1.0) as u16;
                                             if let Some(e) = ENGINE.get() {
                                                 e.lock().unwrap().resize_pane(pid, rows, cols);
                                             }
                                         }
-                                    }
-                                },
-                                onresize: move |evt| {
-                                    // Track window/divider resizes so the PTY matches the view.
-                                    let char_w = (font as f64) * 0.6;
-                                    let line_h = (font as f64) * 1.3;
-                                    if let Ok(size) = evt.get_content_box_size() {
-                                        let cols = (size.width / char_w).floor().max(1.0) as u16;
-                                        let rows = (size.height / line_h).floor().max(1.0) as u16;
-                                        if let Some(e) = ENGINE.get() {
-                                            e.lock().unwrap().resize_pane(pid, rows, cols);
-                                        }
-                                    }
-                                },
-                                for (ri, runs) in p.rows.iter().enumerate() {
-                                    div { key: "{ri}", class: "row",
-                                        for (ci, run) in runs.iter().enumerate() {
-                                            span { key: "{ci}", style: "{run.style}", "{run.text}" }
+                                    },
+                                    for (ri, runs) in p.rows.iter().enumerate() {
+                                        div { key: "{ri}", class: "row",
+                                            for (ci, run) in runs.iter().enumerate() {
+                                                span { key: "{ci}", style: "{run.style}", "{run.text}" }
+                                            }
                                         }
                                     }
                                 }
@@ -812,6 +829,12 @@ html, body, #main, .app { height: 100%; margin: 0; }
     overflow: hidden; color: var(--term-fg); background: var(--term-bg);
 }
 .row { white-space: pre; }
+.browser { display: flex; flex-direction: column; height: 100%; }
+.browser-url {
+    border: none; outline: none; background: var(--bg); color: var(--text);
+    padding: 6px 10px; font-size: 12px; border-bottom: 1px solid var(--border);
+}
+.browser-frame { flex: 1 1 auto; width: 100%; border: none; background: #fff; }
 .unread { cursor: pointer; border: none; }
 .unread.zero { background: transparent; color: var(--muted); padding: 0; font-size: 14px; }
 .notif-backdrop {

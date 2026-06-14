@@ -33,7 +33,7 @@ It reproduces cmux's defining UX:
 | AppKit / SwiftUI | Dioxus (Rust, RSX) over WebKitGTK | Apple frameworks are macOS-only |
 | Sparkle auto-update + Apple codesign | RPM package + Fedora repo / dnf | Native Linux distribution |
 | ExtensionKit sidebar extensions | (out of scope for v1) | No Linux equivalent |
-| In-app WKWebView browser pane | (stubbed for v1) | Nested independent webviews need extra wiring |
+| In-app WKWebView browser pane | Browser pane via webview `<iframe>` | A basic browser pane works; the scriptable agent-browser API is a follow-up |
 
 ## Crate graph
 
