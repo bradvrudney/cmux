@@ -36,9 +36,13 @@ construction, not feature parity with the macOS app.
 - [x] **Session persistence** — topology saved to `session.json` and restored on
       startup (ids preserved); shells respawn for restored panes.
 
+- [x] **Settings view** — in-app panel (`ctrl+comma`) editing theme, font size,
+      opacity, sidebar width/position, vertical tabs, and notification options;
+      changes validate, apply live, and persist to `cmux.json`.
+
 ## In progress
 
-- [ ] Settings view (read/edit `cmux.json` in-app; shortcut reserved).
+- [ ] Apply theme/opacity live (currently persisted; font/sidebar apply live).
 
 ## Planned
 

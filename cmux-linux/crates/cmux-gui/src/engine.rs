@@ -45,6 +45,8 @@ pub struct Engine {
     runtimes: HashMap<PaneId, PaneRuntime>,
     /// Where the topology is persisted; `None` disables persistence (tests).
     session_path: Option<PathBuf>,
+    /// Where `cmux.json` is written when settings change; `None` disables it.
+    config_path: Option<PathBuf>,
     last_save: Instant,
 }
 
@@ -52,10 +54,13 @@ impl Engine {
     /// Build an engine, restoring the saved session if one exists (otherwise
     /// seeding a fresh workspace), and spawn shells for every pane.
     pub fn new(config: Config) -> Self {
-        Self::with_session(config, Self::default_session_path())
+        let mut e = Self::with_session(config, Self::default_session_path());
+        e.config_path = cmux_config::Config::default_path().ok();
+        e
     }
 
     /// Like [`Engine::new`] but with an explicit (or no) persistence path.
+    /// Config persistence is disabled in this form (tests).
     pub fn with_session(config: Config, session_path: Option<PathBuf>) -> Self {
         let state = session_path
             .as_ref()
@@ -71,6 +76,7 @@ impl Engine {
             config,
             runtimes: HashMap::new(),
             session_path,
+            config_path: None,
             last_save: Instant::now(),
         };
         engine.ensure_runtimes();
@@ -435,9 +441,9 @@ impl Engine {
                     value: serde_json::to_value(&self.config).unwrap_or_default(),
                 },
             },
-            Request::SetConfig { path, value } => match self.config.set_path(&path, &value) {
+            Request::SetConfig { path, value } => match self.set_config(&path, &value) {
                 Ok(()) => Response::Ok,
-                Err(e) => Response::error(e.to_string()),
+                Err(e) => Response::error(e),
             },
             Request::ListNotifications => Response::Notifications {
                 notifications: self.notifications().to_vec(),
@@ -496,6 +502,18 @@ impl Engine {
 
     pub fn mark_all_read(&mut self) -> usize {
         self.state.notifications.mark_all_read()
+    }
+
+    /// Set a config value by dotted path and persist `cmux.json` (if a config
+    /// path is configured). Returns the same errors as [`Config::set_path`].
+    pub fn set_config(&mut self, path: &str, value: &str) -> Result<(), String> {
+        self.config
+            .set_path(path, value)
+            .map_err(|e| e.to_string())?;
+        if let Some(p) = &self.config_path {
+            let _ = self.config.save(p);
+        }
+        Ok(())
     }
 }
 
@@ -642,6 +660,17 @@ mod tests {
         assert_eq!(e2.state.panes.len(), pane_count);
         let pane = e2.state.focused_pane().unwrap();
         assert!(e2.terminal(pane).is_some());
+    }
+
+    #[test]
+    fn set_config_updates_and_validates() {
+        let mut e = engine();
+        assert!(e.set_config("appearance.fontSize", "18").is_ok());
+        assert_eq!(e.config.appearance.font_size, 18.0);
+        assert!(e.set_config("sidebar.verticalTabs", "false").is_ok());
+        assert!(!e.config.sidebar.vertical_tabs);
+        // Invalid enum value is rejected.
+        assert!(e.set_config("appearance.theme", "neon").is_err());
     }
 
     #[test]

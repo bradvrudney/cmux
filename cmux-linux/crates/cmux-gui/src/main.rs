@@ -207,6 +207,7 @@ fn App() -> Element {
     let mut tick = use_signal(|| 0u64);
     let mut show_notifications = use_signal(|| false);
     let mut show_palette = use_signal(|| false);
+    let mut show_settings = use_signal(|| false);
 
     // Drive PTY output ingestion + repaint at ~30fps.
     use_future(move || async move {
@@ -259,6 +260,11 @@ fn App() -> Element {
                                 show_palette.set(v);
                                 true
                             }
+                            "openSettings" => {
+                                let v = !show_settings();
+                                show_settings.set(v);
+                                true
+                            }
                             "jumpToLatestNotification" => {
                                 let h = e.lock().unwrap().dispatch_action(&action);
                                 show_notifications.set(false);
@@ -294,8 +300,132 @@ fn App() -> Element {
             if show_palette() {
                 CommandPalette { tick, show_palette, show_notifications }
             }
+            if show_settings() {
+                SettingsPanel { tick, show_settings }
+            }
         }
     }
+}
+
+#[component]
+fn SettingsPanel(tick: Signal<u64>, show_settings: Signal<bool>) -> Element {
+    // Read current values under a brief lock.
+    let cfg = engine().lock().unwrap().config.clone();
+    let theme = match cfg.appearance.theme {
+        cmux_config::Theme::System => "system",
+        cmux_config::Theme::Light => "light",
+        cmux_config::Theme::Dark => "dark",
+    };
+    let position = match cfg.sidebar.position {
+        SidebarPosition::Left => "left",
+        SidebarPosition::Right => "right",
+    };
+
+    rsx! {
+        div {
+            class: "settings-backdrop",
+            onclick: move |_| show_settings.set(false),
+            div {
+                class: "settings",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "settings-head",
+                    span { "Settings" }
+                    button {
+                        class: "settings-close",
+                        onclick: move |_| show_settings.set(false),
+                        "✕"
+                    }
+                }
+                div { class: "settings-body",
+                    SettingRow { label: "Theme",
+                        select {
+                            value: "{theme}",
+                            onchange: move |evt| apply_config("appearance.theme", &evt.value(), tick),
+                            option { value: "system", "System" }
+                            option { value: "light", "Light" }
+                            option { value: "dark", "Dark" }
+                        }
+                    }
+                    SettingRow { label: "Font size",
+                        input {
+                            r#type: "number", min: "8", max: "32",
+                            value: "{cfg.appearance.font_size}",
+                            onchange: move |evt| apply_config("appearance.fontSize", &evt.value(), tick),
+                        }
+                    }
+                    SettingRow { label: "Background opacity",
+                        input {
+                            r#type: "number", min: "0.3", max: "1", step: "0.05",
+                            value: "{cfg.appearance.opacity}",
+                            onchange: move |evt| apply_config("appearance.opacity", &evt.value(), tick),
+                        }
+                    }
+                    SettingRow { label: "Sidebar width",
+                        input {
+                            r#type: "number", min: "120", max: "480",
+                            value: "{cfg.sidebar.width}",
+                            onchange: move |evt| apply_config("sidebar.width", &evt.value(), tick),
+                        }
+                    }
+                    SettingRow { label: "Sidebar position",
+                        select {
+                            value: "{position}",
+                            onchange: move |evt| apply_config("sidebar.position", &evt.value(), tick),
+                            option { value: "left", "Left" }
+                            option { value: "right", "Right" }
+                        }
+                    }
+                    SettingRow { label: "Vertical tabs",
+                        input {
+                            r#type: "checkbox",
+                            checked: cfg.sidebar.vertical_tabs,
+                            onchange: move |evt| apply_config("sidebar.verticalTabs", &bool_str(&evt.value()), tick),
+                        }
+                    }
+                    SettingRow { label: "Notifications enabled",
+                        input {
+                            r#type: "checkbox",
+                            checked: cfg.notifications.enabled,
+                            onchange: move |evt| apply_config("notifications.enabled", &bool_str(&evt.value()), tick),
+                        }
+                    }
+                    SettingRow { label: "Ring on bell",
+                        input {
+                            r#type: "checkbox",
+                            checked: cfg.notifications.ring_on_bell,
+                            onchange: move |evt| apply_config("notifications.ringOnBell", &bool_str(&evt.value()), tick),
+                        }
+                    }
+                }
+                div { class: "settings-foot", "Saved to ~/.config/cmux/cmux.json" }
+            }
+        }
+    }
+}
+
+#[component]
+fn SettingRow(label: String, children: Element) -> Element {
+    rsx! {
+        div { class: "settings-row",
+            span { class: "settings-label", "{label}" }
+            div { class: "settings-control", {children} }
+        }
+    }
+}
+
+/// Checkbox `onchange` reports "true"/"false" or "on"/""; normalize to JSON bool.
+fn bool_str(v: &str) -> String {
+    if v == "true" || v == "on" {
+        "true".into()
+    } else {
+        "false".into()
+    }
+}
+
+/// Apply a settings edit through the engine (validates + persists cmux.json).
+fn apply_config(path: &str, value: &str, mut tick: Signal<u64>) {
+    let _ = engine().lock().unwrap().set_config(path, value);
+    tick += 1;
 }
 
 /// Execute a palette action through the same paths as keyboard shortcuts.
@@ -682,4 +812,30 @@ html, body, #main, .app { height: 100%; margin: 0; }
 }
 .palette-item:hover { background: #313244; }
 .palette-chord { color: #6c7086; font-size: 11px; font-family: monospace; }
+.settings-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+    display: flex; justify-content: center; align-items: flex-start; z-index: 70;
+}
+.settings {
+    margin-top: 8vh; width: 480px; max-width: 92vw; background: #1e1e2e;
+    border: 1px solid #45475a; border-radius: 10px; overflow: hidden;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+}
+.settings-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; border-bottom: 1px solid #313244; font-weight: 600;
+}
+.settings-close { background: none; border: none; color: #6c7086; cursor: pointer; font-size: 14px; }
+.settings-body { padding: 8px 16px; max-height: 60vh; overflow-y: auto; }
+.settings-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 0; border-bottom: 1px solid #26263a; font-size: 13px;
+}
+.settings-label { color: #bac2de; }
+.settings-control input, .settings-control select {
+    background: #181825; color: #cdd6f4; border: 1px solid #313244;
+    border-radius: 6px; padding: 4px 8px; font-size: 13px;
+}
+.settings-control input[type=checkbox] { width: 16px; height: 16px; }
+.settings-foot { padding: 10px 16px; color: #6c7086; font-size: 11px; border-top: 1px solid #313244; }
 "#;
