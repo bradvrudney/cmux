@@ -6,9 +6,10 @@
 
 use cmux_term::{Cell, Color, Terminal};
 
-/// Default foreground/background (Catppuccin Mocha-ish, matching the icon).
-pub const DEFAULT_FG: &str = "#cdd6f4";
-pub const DEFAULT_BG: &str = "#1e1e2e";
+/// Default foreground/background are emitted as CSS variables so the active
+/// theme (set on the app root) controls them; the fallbacks match the dark icon.
+pub const DEFAULT_FG: &str = "var(--term-fg, #cdd6f4)";
+pub const DEFAULT_BG: &str = "var(--term-bg, #1e1e2e)";
 
 /// A maximal run of same-styled cells within a row.
 #[derive(Debug, Clone, PartialEq)]
@@ -143,9 +144,10 @@ mod tests {
     }
 
     #[test]
-    fn default_colors() {
+    fn default_colors_use_theme_variables() {
         assert_eq!(color_css(Color::Default, true), DEFAULT_FG);
         assert_eq!(color_css(Color::Default, false), DEFAULT_BG);
+        assert!(color_css(Color::Default, true).starts_with("var(--term-fg"));
         assert_eq!(color_css(Color::Rgb(1, 2, 3), true), "rgb(1,2,3)");
     }
 

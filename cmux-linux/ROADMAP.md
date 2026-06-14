@@ -40,9 +40,14 @@ construction, not feature parity with the macOS app.
       opacity, sidebar width/position, vertical tabs, and notification options;
       changes validate, apply live, and persist to `cmux.json`.
 
+- [x] **Live theming** — light/dark palettes via CSS variables (Catppuccin
+      Mocha/Latte), including terminal default colors; switches instantly from
+      Settings.
+
 ## In progress
 
-- [ ] Apply theme/opacity live (currently persisted; font/sidebar apply live).
+- [ ] Background opacity (persisted; needs window transparency to apply visually).
+- [ ] OS-appearance detection for the "system" theme (resolves to dark for now).
 
 ## Planned
 
