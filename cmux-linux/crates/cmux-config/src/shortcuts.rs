@@ -24,6 +24,7 @@ pub fn default_shortcuts() -> BTreeMap<String, String> {
         ("focusUp", "ctrl+alt+up"),
         ("focusDown", "ctrl+alt+down"),
         ("commandPalette", "ctrl+shift+p"),
+        ("find", "ctrl+shift+f"),
         ("toggleNotifications", "ctrl+shift+i"),
         ("jumpToLatestNotification", "ctrl+shift+j"),
         ("reopenClosedTab", "ctrl+shift+z"),

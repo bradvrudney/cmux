@@ -38,6 +38,7 @@ COMMANDS:
     resize <pane> <rows> <cols>       Resize a pane's PTY/grid
     browser <url> [vertical]          Split into a browser pane
     navigate <pane> <url>             Point a browser pane at a URL
+    find <pane> <query>               Search a pane's scrollback + screen
     config get [path]                 Read config (whole tree or dotted path)
     config set <path> <value>         Set a config value
 
@@ -169,6 +170,17 @@ fn parse(args: &[String]) -> Result<Option<Request>, String> {
             Request::NavigateBrowser {
                 pane: PaneId(parse_id(pane)?),
                 url,
+            }
+        }
+        "find" => {
+            let pane = rest.first().ok_or("find requires a pane id")?;
+            let query = rest.get(1..).map(|s| s.join(" ")).unwrap_or_default();
+            if query.is_empty() {
+                return Err("find requires a query".into());
+            }
+            Request::Find {
+                pane: PaneId(parse_id(pane)?),
+                query,
             }
         }
         "resize" => {
@@ -334,6 +346,12 @@ fn print_response(resp: &Response) {
         }
         Response::Error { message } => eprintln!("error: {message}"),
         Response::Workspaces { workspaces } => print_tree(workspaces),
+        Response::Matches { matches } => {
+            println!("{} match(es)", matches.len());
+            for (line, col) in matches {
+                println!("  line {line}, col {col}");
+            }
+        }
         Response::Notifications { notifications } => {
             if notifications.is_empty() {
                 println!("(no notifications)");
@@ -552,6 +570,18 @@ mod tests {
             })
         );
         assert!(parse(&argv(&["browser"])).is_err());
+    }
+
+    #[test]
+    fn find_command() {
+        assert_eq!(
+            parse(&argv(&["find", "surface:2", "error", "log"])).unwrap(),
+            Some(Request::Find {
+                pane: PaneId(2),
+                query: "error log".into()
+            })
+        );
+        assert!(parse(&argv(&["find", "surface:2"])).is_err());
     }
 
     #[test]

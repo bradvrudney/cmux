@@ -239,6 +239,29 @@ impl Engine {
             .map(|r| r.term.viewport(r.scroll_offset))
     }
 
+    /// Search a pane's scrollback + screen for `query` (case-insensitive).
+    pub fn search_pane(&self, pane: PaneId, query: &str) -> Vec<cmux_term::Match> {
+        self.runtimes
+            .get(&pane)
+            .map(|rt| rt.term.search(query))
+            .unwrap_or_default()
+    }
+
+    /// Scroll a pane so absolute line `abs_line` is near the top of the view.
+    pub fn scroll_pane_to_line(&mut self, pane: PaneId, abs_line: usize) -> bool {
+        match self.runtimes.get_mut(&pane) {
+            Some(rt) => {
+                let rows = rt.term.rows() as i32;
+                let total = rt.term.total_lines() as i32;
+                let max = rt.term.scrollback_len() as i32;
+                let offset = (total - rows - abs_line as i32).clamp(0, max);
+                rt.scroll_offset = offset as usize;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Scroll a pane through its history. Positive `delta` scrolls up (older);
     /// the offset is clamped to the available scrollback.
     pub fn scroll_pane(&mut self, pane: PaneId, delta: i32) -> bool {
@@ -563,6 +586,17 @@ impl Engine {
                 } else {
                     Response::error("not a browser pane")
                 }
+            }
+            Request::Find { pane, query } => {
+                if self.terminal(pane).is_none() {
+                    return Response::error("no such terminal pane");
+                }
+                let matches = self
+                    .search_pane(pane, &query)
+                    .into_iter()
+                    .map(|m| (m.line, m.col))
+                    .collect();
+                Response::Matches { matches }
             }
         }
     }

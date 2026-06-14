@@ -98,6 +98,8 @@ pub enum Request {
     OpenBrowser { url: String, orientation: SplitDir },
     /// Navigate an existing browser pane to `url`.
     NavigateBrowser { pane: PaneId, url: String },
+    /// Search a pane's scrollback + screen for `query`.
+    Find { pane: PaneId, query: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -137,6 +139,8 @@ pub enum Response {
         notifications: Vec<cmux_core::notification::Notification>,
     },
     ConfigValue { value: serde_json::Value },
+    /// Search hits as (line, col) pairs.
+    Matches { matches: Vec<(usize, usize)> },
     /// Returned when an operation succeeded and produced a new id.
     Created { id: u64 },
     Error { message: String },

@@ -253,6 +253,7 @@ fn App() -> Element {
     let mut show_notifications = use_signal(|| false);
     let mut show_palette = use_signal(|| false);
     let mut show_settings = use_signal(|| false);
+    let mut show_find = use_signal(|| false);
 
     // Drive PTY output ingestion + repaint at ~30fps.
     use_future(move || async move {
@@ -311,6 +312,11 @@ fn App() -> Element {
                                 show_settings.set(v);
                                 true
                             }
+                            "find" => {
+                                let v = !show_find();
+                                show_find.set(v);
+                                true
+                            }
                             "jumpToLatestNotification" => {
                                 let h = e.lock().unwrap().dispatch_action(&action);
                                 show_notifications.set(false);
@@ -349,6 +355,84 @@ fn App() -> Element {
             if show_settings() {
                 SettingsPanel { tick, show_settings }
             }
+            if show_find() {
+                FindBar { tick, show_find }
+            }
+        }
+    }
+}
+
+/// Scroll the focused pane to the `idx`-th match line (wrapping).
+fn find_goto(lines: &[usize], idx: usize, mut tick: Signal<u64>) {
+    if lines.is_empty() {
+        return;
+    }
+    let line = lines[idx % lines.len()];
+    let mut e = engine().lock().unwrap();
+    if let Some(p) = e.state.focused_pane() {
+        e.scroll_pane_to_line(p, line);
+    }
+    tick += 1;
+}
+
+#[component]
+fn FindBar(tick: Signal<u64>, show_find: Signal<bool>) -> Element {
+    let mut query = use_signal(String::new);
+    let mut index = use_signal(|| 0usize);
+
+    // Matches for the focused pane against the current query.
+    let (count, lines) = {
+        let e = engine().lock().unwrap();
+        match e.state.focused_pane() {
+            Some(p) => {
+                let m = e.search_pane(p, &query());
+                (m.len(), m.into_iter().map(|m| m.line).collect::<Vec<_>>())
+            }
+            None => (0, Vec::new()),
+        }
+    };
+
+    let lines_for_enter = lines.clone();
+    rsx! {
+        div { class: "findbar",
+            input {
+                class: "find-input",
+                autofocus: true,
+                placeholder: "Find in terminal…",
+                value: "{query}",
+                oninput: move |evt| {
+                    query.set(evt.value());
+                    index.set(0);
+                },
+                onkeydown: move |evt| {
+                    match evt.key() {
+                        Key::Escape => {
+                            show_find.set(false);
+                            evt.prevent_default();
+                        }
+                        Key::Enter => {
+                            let next = index() + 1;
+                            index.set(next);
+                            find_goto(&lines_for_enter, next - 1, tick);
+                            evt.prevent_default();
+                        }
+                        _ => {}
+                    }
+                },
+            }
+            span { class: "find-count",
+                if count == 0 { "no matches" } else { "{count} matches" }
+            }
+            button {
+                class: "find-next",
+                onclick: move |_| {
+                    let next = index() + 1;
+                    index.set(next);
+                    find_goto(&lines, next - 1, tick);
+                },
+                "Next"
+            }
+            button { class: "find-close", onclick: move |_| show_find.set(false), "✕" }
         }
     }
 }
@@ -959,6 +1043,21 @@ html, body, #main, .app { height: 100%; margin: 0; }
 .browser-frame { flex: 1 1 auto; width: 100%; border: none; background: #fff; }
 .divider { position: absolute; z-index: 5; background: transparent; }
 .divider:hover { background: var(--accent); opacity: 0.5; }
+.findbar {
+    position: absolute; top: 8px; right: 16px; z-index: 40;
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    background: var(--panel); border: 1px solid var(--border-strong);
+    border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.find-input {
+    border: none; outline: none; background: var(--bg); color: var(--text);
+    padding: 4px 8px; font-size: 13px; border-radius: 4px; width: 200px;
+}
+.find-count { color: var(--muted); font-size: 12px; }
+.find-next, .find-close {
+    background: var(--panel2); color: var(--text-dim); border: none;
+    border-radius: 4px; padding: 4px 8px; font-size: 12px; cursor: pointer;
+}
 .unread { cursor: pointer; border: none; }
 .unread.zero { background: transparent; color: var(--muted); padding: 0; font-size: 14px; }
 .notif-backdrop {

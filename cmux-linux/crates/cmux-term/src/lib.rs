@@ -245,6 +245,23 @@ pub struct Terminal {
     state: TermState,
 }
 
+/// A search hit: a line (absolute, 0 = oldest scrollback) and char column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Match {
+    pub line: usize,
+    pub col: usize,
+}
+
+/// All starting char-indices where `needle` occurs in `haystack`.
+fn find_all(haystack: &[char], needle: &[char]) -> Vec<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return Vec::new();
+    }
+    (0..=haystack.len() - needle.len())
+        .filter(|&start| haystack[start..start + needle.len()] == needle[..])
+        .collect()
+}
+
 /// A saved cursor position (DECSC / `ESC [ s`).
 #[derive(Debug, Clone, Copy, Default)]
 struct SavedCursor {
@@ -399,6 +416,37 @@ impl Terminal {
     /// Number of lines preserved in scrollback (history above the screen).
     pub fn scrollback_len(&self) -> usize {
         self.state.scrollback.len()
+    }
+
+    /// Total addressable lines: scrollback followed by the live screen rows.
+    pub fn total_lines(&self) -> usize {
+        self.state.scrollback.len() + self.state.screen.rows()
+    }
+
+    /// Case-insensitive search across scrollback + screen. Returns matches in
+    /// absolute line order (line 0 = oldest scrollback line, then screen rows).
+    pub fn search(&self, query: &str) -> Vec<Match> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let needle: Vec<char> = query.to_lowercase().chars().collect();
+        let mut out = Vec::new();
+        let push_line = |line: usize, text: &str, out: &mut Vec<Match>| {
+            let hay: Vec<char> = text.to_lowercase().chars().collect();
+            for col in find_all(&hay, &needle) {
+                out.push(Match { line, col });
+            }
+        };
+        for (i, line) in self.state.scrollback.iter().enumerate() {
+            let text: String = line.iter().map(|c| c.c).collect();
+            push_line(i, &text, &mut out);
+        }
+        let base = self.state.scrollback.len();
+        for r in 0..self.state.screen.rows() {
+            let text: String = self.state.screen.row(r).iter().map(|c| c.c).collect();
+            push_line(base + r, &text, &mut out);
+        }
+        out
     }
 
     /// The visible viewport scrolled back by `offset` lines (0 = live screen).
@@ -1106,6 +1154,22 @@ mod tests {
         let back = t.viewport(t.scrollback_len());
         let back_top: String = back[0].iter().map(|c| c.c).collect();
         assert!(back_top.trim_end().starts_with("L0"));
+    }
+
+    #[test]
+    fn search_finds_matches_in_scrollback_and_screen() {
+        let mut t = Terminal::new(2, 10);
+        // "needle" on the first line scrolls into history; "needle" again live.
+        t.feed(b"needle\r\nfiller\r\nneedle");
+        let hits = t.search("needle");
+        assert_eq!(hits.len(), 2);
+        // Case-insensitive, and column reported.
+        assert_eq!(t.search("NEEDLE").len(), 2);
+        assert_eq!(hits[0].col, 0);
+        // First hit is older (lower absolute line) than the second.
+        assert!(hits[0].line < hits[1].line);
+        assert!(t.search("absent").is_empty());
+        assert!(t.search("").is_empty());
     }
 
     #[test]

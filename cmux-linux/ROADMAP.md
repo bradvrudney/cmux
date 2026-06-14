@@ -70,11 +70,14 @@ construction, not feature parity with the macOS app.
 - [x] **Terminal scrollback** — lines scrolling off the primary screen are kept
       (10k-line cap; alt screen excluded); the mouse wheel scrolls a pane
       through history, and new output snaps back to the live screen.
+- [x] **In-terminal find** — case-insensitive search over scrollback + screen
+      (`ctrl+shift+f` find bar with match count and next; `cmux find <pane>
+      <query>` from the CLI). Match navigation scrolls the pane to the hit.
 
 ## Planned
 
 - [ ] Scriptable browser API (upstream's agent-browser port) on the browser pane.
-- [ ] In-terminal find (search the scrollback).
+- [ ] Highlight find matches in-place (currently scrolls to the match line).
 
 ## Out of scope (no Linux equivalent / deliberately dropped for v1)
 
