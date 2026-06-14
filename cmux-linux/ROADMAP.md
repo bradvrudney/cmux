@@ -64,13 +64,14 @@ construction, not feature parity with the macOS app.
       another reorders via `reorder_tab` (also CLI-scriptable). Mouse
       interaction pending visual verification on a Fedora desktop.
 
-## In progress
-
-- [ ] Background opacity (persisted; needs window transparency to apply visually).
+- [x] **Background opacity** — the window is transparent and surfaces are tinted
+      with the opacity setting via `color-mix` (no alpha compounding); the
+      desktop shows through at <1.0. Pending visual verification on a compositor.
 
 ## Planned
 
 - [ ] Scriptable browser API (upstream's agent-browser port) on the browser pane.
+- [ ] Terminal scrollback + find.
 
 ## Out of scope (no Linux equivalent / deliberately dropped for v1)
 

@@ -52,7 +52,11 @@ fn main() {
         }
     }
 
-    let window = WindowBuilder::new().with_title("cmux");
+    // Transparent so the background-opacity setting can let the desktop show
+    // through semi-transparent surfaces.
+    let window = WindowBuilder::new()
+        .with_title("cmux")
+        .with_transparent(true);
     let cfg = DesktopConfig::new().with_window(window);
     LaunchBuilder::desktop().with_cfg(cfg).launch(App);
 }
@@ -883,14 +887,18 @@ html, body, #main, .app { height: 100%; margin: 0; }
         --term-fg:#4c4f69; --term-bg:#eff1f5; --overlay:rgba(60,60,80,0.35);
     }
 }
+/* Background-opacity model: siblings (.sidebar, .pane-area>.pane) are tinted
+   with --term-opacity via color-mix; ancestors stay transparent so alpha does
+   not compound. At opacity 1.0 the mix is fully opaque (normal solid look). */
 .app {
     display: flex; flex-direction: row; height: 100vh; outline: none;
     font-family: -apple-system, system-ui, sans-serif;
-    background: var(--bg); color: var(--text); overflow: hidden;
+    background: transparent; color: var(--text); overflow: hidden;
 }
 .sidebar {
     display: flex; flex-direction: column; flex: 0 0 auto;
-    background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto;
+    background: color-mix(in srgb, var(--panel) calc(var(--term-opacity, 1) * 100%), transparent);
+    border-right: 1px solid var(--border); overflow-y: auto;
 }
 .sidebar-header {
     display: flex; align-items: center; justify-content: space-between;
@@ -918,9 +926,10 @@ html, body, #main, .app { height: 100%; margin: 0; }
 .ring-dot { color: var(--accent); font-size: 10px; }
 .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab.add { justify-content: center; cursor: pointer; }
-.pane-area { position: relative; flex: 1 1 auto; background: var(--deep); }
+.pane-area { position: relative; flex: 1 1 auto; background: transparent; }
 .pane {
-    position: absolute; overflow: hidden; background: var(--term-bg);
+    position: absolute; overflow: hidden;
+    background: color-mix(in srgb, var(--term-bg) calc(var(--term-opacity, 1) * 100%), transparent);
     border: 1px solid var(--border);
 }
 .pane.focused { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
@@ -932,7 +941,7 @@ html, body, #main, .app { height: 100%; margin: 0; }
 .grid {
     font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
     line-height: 1.2; white-space: pre; padding: 6px; height: 100%;
-    overflow: hidden; color: var(--term-fg); background: var(--term-bg);
+    overflow: hidden; color: var(--term-fg); background: transparent;
 }
 .row { white-space: pre; }
 .browser { display: flex; flex-direction: column; height: 100%; }
