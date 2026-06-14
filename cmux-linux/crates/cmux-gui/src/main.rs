@@ -602,6 +602,7 @@ fn NotificationPanel(
 fn Sidebar(snap: Snapshot, tick: Signal<u64>, show_notifications: Signal<bool>) -> Element {
     let width = snap.sidebar_width;
     let mut show_notifications = show_notifications;
+    let mut drag_tab = use_signal(|| Option::<TabId>::None);
     rsx! {
         div {
             class: "sidebar",
@@ -642,16 +643,30 @@ fn Sidebar(snap: Snapshot, tick: Signal<u64>, show_notifications: Signal<bool>) 
                 }
             }
             div { class: "tabs",
-                for t in snap.tabs.iter().cloned() {
+                for (idx, t) in snap.tabs.iter().cloned().enumerate() {
                     div {
                         key: "{t.id}",
                         class: if t.active { "tab active" } else { "tab" },
+                        draggable: "true",
                         onclick: move |_| {
                             let mut g = engine().lock().unwrap();
                             if let Some(ws) = g.state.active_workspace {
                                 g.state.focus_tab(ws, t.id);
                             }
                             tick += 1;
+                        },
+                        ondragstart: move |_| drag_tab.set(Some(t.id)),
+                        ondragover: move |evt| evt.prevent_default(),
+                        ondrop: move |evt| {
+                            evt.prevent_default();
+                            if let Some(src) = drag_tab() {
+                                let mut g = engine().lock().unwrap();
+                                if let Some(ws) = g.state.active_workspace {
+                                    g.state.reorder_tab(ws, src, idx);
+                                }
+                                drag_tab.set(None);
+                                tick += 1;
+                            }
                         },
                         if t.attention {
                             span { class: "ring-dot", "●" }

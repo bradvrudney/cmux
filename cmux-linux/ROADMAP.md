@@ -60,6 +60,9 @@ construction, not feature parity with the macOS app.
       that adjust the split ratio live (core `dividers`/`set_ratio_by_index`
       tested; the mouse interaction itself is pending visual verification on a
       Fedora desktop).
+- [x] **Tab drag-to-reorder** — sidebar tabs are draggable; dropping one onto
+      another reorders via `reorder_tab` (also CLI-scriptable). Mouse
+      interaction pending visual verification on a Fedora desktop.
 
 ## In progress
 
@@ -67,7 +70,6 @@ construction, not feature parity with the macOS app.
 
 ## Planned
 
-- [ ] Tab drag-to-reorder (engine `reorder_tab` exists and is CLI-scriptable).
 - [ ] Scriptable browser API (upstream's agent-browser port) on the browser pane.
 
 ## Out of scope (no Linux equivalent / deliberately dropped for v1)
