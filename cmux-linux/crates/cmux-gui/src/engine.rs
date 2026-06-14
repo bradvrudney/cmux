@@ -555,6 +555,20 @@ impl Engine {
         self.state.pane(pane).map(|p| p.ring).unwrap_or_default()
     }
 
+    /// Dividers of the active tab (unit-square coordinates).
+    pub fn active_dividers(&self) -> Vec<cmux_core::split::Divider> {
+        self.state
+            .active_workspace()
+            .and_then(|w| w.active_tab())
+            .map(|t| t.tree.dividers(Rect::new(0.0, 0.0, 1.0, 1.0)))
+            .unwrap_or_default()
+    }
+
+    /// Drag a divider in the active tab to a new ratio.
+    pub fn set_active_divider(&mut self, split_index: usize, ratio: f32) -> bool {
+        self.state.set_active_divider(split_index, ratio)
+    }
+
     pub fn notifications(&self) -> &[cmux_core::Notification] {
         self.state.notifications.entries()
     }

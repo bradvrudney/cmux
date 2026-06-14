@@ -328,6 +328,23 @@ impl AppState {
         true
     }
 
+    /// Set the ratio of a divider (by pre-order split index) in the active tab.
+    pub fn set_active_divider(&mut self, split_index: usize, ratio: f32) -> bool {
+        let Some(ws) = self.active_workspace else {
+            return false;
+        };
+        let Some(w) = self.workspace_mut(ws) else {
+            return false;
+        };
+        let Some(tab) = w.active_tab else {
+            return false;
+        };
+        match w.tabs.iter_mut().find(|t| t.id == tab) {
+            Some(t) => t.tree.set_ratio_by_index(split_index, ratio),
+            None => false,
+        }
+    }
+
     /// Rename a tab. Returns `true` if the tab exists.
     pub fn rename_tab(&mut self, tab: TabId, title: impl Into<String>) -> bool {
         for w in &mut self.workspaces {
@@ -508,6 +525,17 @@ mod tests {
         assert!(s.focus_pane(bg_pane));
         assert_eq!(s.pane(bg_pane).unwrap().ring, RingState::Idle);
         assert_eq!(s.notifications.unread_count(), 0);
+    }
+
+    #[test]
+    fn set_active_divider_resizes_split() {
+        let (mut s, _ws) = seeded();
+        s.split_focused(Orientation::Horizontal);
+        assert!(s.set_active_divider(0, 0.3));
+        let t = s.active_workspace().unwrap().active_tab().unwrap();
+        let d = t.tree.dividers(crate::split::Rect::new(0.0, 0.0, 1.0, 1.0));
+        assert_eq!(d[0].ratio, 0.3);
+        assert!(!s.set_active_divider(5, 0.5));
     }
 
     #[test]

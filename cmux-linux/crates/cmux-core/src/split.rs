@@ -77,6 +77,37 @@ impl Rect {
     }
 }
 
+/// A split boundary that can be dragged to change its ratio.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Divider {
+    /// Pre-order index among split nodes; pass to [`SplitTree::set_ratio_by_index`].
+    pub split_index: usize,
+    pub orientation: Orientation,
+    /// The full region the split occupies (so a UI can map a pointer to a ratio).
+    pub region: Rect,
+    pub ratio: f32,
+}
+
+/// The two child regions of a split occupying `rect` at `ratio`.
+fn child_rects(rect: Rect, orientation: Orientation, ratio: f32) -> (Rect, Rect) {
+    match orientation {
+        Orientation::Horizontal => {
+            let fw = rect.w * ratio;
+            (
+                Rect::new(rect.x, rect.y, fw, rect.h),
+                Rect::new(rect.x + fw, rect.y, rect.w - fw, rect.h),
+            )
+        }
+        Orientation::Vertical => {
+            let fh = rect.h * ratio;
+            (
+                Rect::new(rect.x, rect.y, rect.w, fh),
+                Rect::new(rect.x, rect.y + fh, rect.w, rect.h - fh),
+            )
+        }
+    }
+}
+
 /// The split tree for one tab. Empty when the tab has no panes.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SplitTree {
@@ -251,6 +282,71 @@ impl SplitTree {
         false
     }
 
+    /// Enumerate the dividers (split boundaries) within `viewport`, in
+    /// pre-order over split nodes. The `split_index` aligns with
+    /// [`SplitTree::set_ratio_by_index`] so a dragged divider can be addressed.
+    pub fn dividers(&self, viewport: Rect) -> Vec<Divider> {
+        let mut out = Vec::new();
+        let mut idx = 0usize;
+        if let Some(root) = &self.root {
+            Self::collect_dividers(root, viewport, &mut idx, &mut out);
+        }
+        out
+    }
+
+    fn collect_dividers(node: &Node, rect: Rect, idx: &mut usize, out: &mut Vec<Divider>) {
+        if let Node::Split {
+            orientation,
+            ratio,
+            first,
+            second,
+        } = node
+        {
+            let my_index = *idx;
+            *idx += 1;
+            out.push(Divider {
+                split_index: my_index,
+                orientation: *orientation,
+                region: rect,
+                ratio: *ratio,
+            });
+            let (r1, r2) = child_rects(rect, *orientation, *ratio);
+            Self::collect_dividers(first, r1, idx, out);
+            Self::collect_dividers(second, r2, idx, out);
+        }
+    }
+
+    /// Set the ratio of the split at `split_index` (pre-order, as produced by
+    /// [`SplitTree::dividers`]). The ratio is clamped to a visible range.
+    pub fn set_ratio_by_index(&mut self, split_index: usize, ratio: f32) -> bool {
+        let ratio = ratio.clamp(0.05, 0.95);
+        let mut idx = 0usize;
+        match &mut self.root {
+            Some(root) => Self::set_ratio_idx(root, split_index, &mut idx, ratio),
+            None => false,
+        }
+    }
+
+    fn set_ratio_idx(node: &mut Node, target: usize, idx: &mut usize, ratio: f32) -> bool {
+        if let Node::Split {
+            ratio: r,
+            first,
+            second,
+            ..
+        } = node
+        {
+            let my = *idx;
+            *idx += 1;
+            if my == target {
+                *r = ratio;
+                return true;
+            }
+            return Self::set_ratio_idx(first, target, idx, ratio)
+                || Self::set_ratio_idx(second, target, idx, ratio);
+        }
+        false
+    }
+
     /// Compute the rectangle of every pane within `viewport`.
     pub fn layout(&self, viewport: Rect) -> Vec<(PaneId, Rect)> {
         let mut out = Vec::new();
@@ -408,6 +504,40 @@ mod tests {
         let layout = t.layout(Rect::new(0.0, 0.0, 100.0, 100.0));
         let r1 = layout.iter().find(|(p, _)| *p == PaneId(1)).unwrap().1;
         assert_eq!(r1.w, 95.0);
+    }
+
+    #[test]
+    fn dividers_enumerated_with_indices() {
+        let mut t = SplitTree::single(PaneId(1));
+        t.split(PaneId(1), PaneId(2), Orientation::Horizontal, false); // split 0
+        t.split(PaneId(2), PaneId(3), Orientation::Vertical, false); // split 1 (under second)
+        let d = t.dividers(Rect::new(0.0, 0.0, 1.0, 1.0));
+        assert_eq!(d.len(), 2);
+        assert_eq!(d[0].split_index, 0);
+        assert_eq!(d[0].orientation, Orientation::Horizontal);
+        assert_eq!(d[1].split_index, 1);
+        assert_eq!(d[1].orientation, Orientation::Vertical);
+    }
+
+    #[test]
+    fn set_ratio_by_index_changes_layout() {
+        let mut t = SplitTree::single(PaneId(1));
+        t.split(PaneId(1), PaneId(2), Orientation::Horizontal, false);
+        assert!(t.set_ratio_by_index(0, 0.25));
+        let layout = t.layout(Rect::new(0.0, 0.0, 100.0, 100.0));
+        let r1 = layout.iter().find(|(p, _)| *p == PaneId(1)).unwrap().1;
+        assert_eq!(r1.w, 25.0);
+        // Out-of-range index is a no-op.
+        assert!(!t.set_ratio_by_index(9, 0.5));
+    }
+
+    #[test]
+    fn set_ratio_by_index_is_clamped() {
+        let mut t = SplitTree::single(PaneId(1));
+        t.split(PaneId(1), PaneId(2), Orientation::Horizontal, false);
+        t.set_ratio_by_index(0, 5.0);
+        let d = t.dividers(Rect::new(0.0, 0.0, 1.0, 1.0));
+        assert_eq!(d[0].ratio, 0.95);
     }
 
     #[test]

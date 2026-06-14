@@ -119,11 +119,28 @@ struct NotifView {
     read: bool,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+struct DividerView {
+    split_index: usize,
+    horizontal: bool,
+    region: cmux_core::split::Rect,
+    ratio: f32,
+}
+
+/// In-progress divider drag (which split, and the region it spans).
+#[derive(Clone, Copy, PartialEq)]
+struct DragInfo {
+    split_index: usize,
+    horizontal: bool,
+    region: cmux_core::split::Rect,
+}
+
 #[derive(Clone, PartialEq, Default)]
 struct Snapshot {
     workspaces: Vec<WorkspaceView>,
     tabs: Vec<TabView>,
     panes: Vec<PaneView>,
+    dividers: Vec<DividerView>,
     notifications: Vec<NotifView>,
     unread: usize,
     sidebar_width: f32,
@@ -181,6 +198,17 @@ fn snapshot() -> Snapshot {
         })
         .collect();
 
+    let dividers = e
+        .active_dividers()
+        .into_iter()
+        .map(|d| DividerView {
+            split_index: d.split_index,
+            horizontal: matches!(d.orientation, cmux_core::Orientation::Horizontal),
+            region: d.region,
+            ratio: d.ratio,
+        })
+        .collect();
+
     let notifications = e
         .notifications()
         .iter()
@@ -197,6 +225,7 @@ fn snapshot() -> Snapshot {
         workspaces,
         tabs,
         panes,
+        dividers,
         notifications,
         unread: e.state.notifications.unread_count(),
         sidebar_width: e.config.sidebar.width,
@@ -646,8 +675,38 @@ fn Sidebar(snap: Snapshot, tick: Signal<u64>, show_notifications: Signal<bool>) 
 #[component]
 fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
     let font = snap.font_size;
+    // Divider-drag state and the measured pane-area rect (viewport pixels).
+    let mut dragging = use_signal(|| Option::<DragInfo>::None);
+    let mut area_rect = use_signal(|| Option::<(f64, f64, f64, f64)>::None);
     rsx! {
-        div { class: "pane-area",
+        div {
+            class: "pane-area",
+            onmounted: move |evt| async move {
+                if let Ok(r) = evt.data().get_client_rect().await {
+                    area_rect.set(Some((r.origin.x, r.origin.y, r.width(), r.height())));
+                }
+            },
+            onmousemove: move |evt| {
+                if let Some(drag) = dragging() {
+                    if let Some((ax, ay, aw, ah)) = area_rect() {
+                        if aw > 0.0 && ah > 0.0 {
+                            let c = evt.client_coordinates();
+                            let ratio = if drag.horizontal {
+                                ((c.x - ax) / aw) as f32 - drag.region.x
+                            } else {
+                                ((c.y - ay) / ah) as f32 - drag.region.y
+                            };
+                            let span = if drag.horizontal { drag.region.w } else { drag.region.h };
+                            if span > 0.0 {
+                                engine().lock().unwrap().set_active_divider(drag.split_index, ratio / span);
+                                tick += 1;
+                            }
+                        }
+                    }
+                }
+            },
+            onmouseup: move |_| dragging.set(None),
+            onmouseleave: move |_| dragging.set(None),
             for p in snap.panes.iter().cloned() {
                 {
                     let left = p.rect.x * 100.0;
@@ -722,6 +781,38 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+            for d in snap.dividers.iter().cloned() {
+                {
+                    let horizontal = d.horizontal;
+                    let frac = if horizontal {
+                        d.region.x + d.region.w * d.ratio
+                    } else {
+                        d.region.y + d.region.h * d.ratio
+                    };
+                    let boundary = frac * 100.0;
+                    let style = if horizontal {
+                        let top = d.region.y * 100.0;
+                        let h = d.region.h * 100.0;
+                        format!("left:calc({boundary}% - 3px);top:{top}%;height:{h}%;width:6px;cursor:col-resize;")
+                    } else {
+                        let leftp = d.region.x * 100.0;
+                        let wp = d.region.w * 100.0;
+                        format!("top:calc({boundary}% - 3px);left:{leftp}%;width:{wp}%;height:6px;cursor:row-resize;")
+                    };
+                    let info = DragInfo { split_index: d.split_index, horizontal, region: d.region };
+                    rsx! {
+                        div {
+                            key: "d{d.split_index}",
+                            class: "divider",
+                            style: "{style}",
+                            onmousedown: move |evt| {
+                                evt.stop_propagation();
+                                dragging.set(Some(info));
+                            },
                         }
                     }
                 }
@@ -835,6 +926,8 @@ html, body, #main, .app { height: 100%; margin: 0; }
     padding: 6px 10px; font-size: 12px; border-bottom: 1px solid var(--border);
 }
 .browser-frame { flex: 1 1 auto; width: 100%; border: none; background: #fff; }
+.divider { position: absolute; z-index: 5; background: transparent; }
+.divider:hover { background: var(--accent); opacity: 0.5; }
 .unread { cursor: pointer; border: none; }
 .unread.zero { background: transparent; color: var(--muted); padding: 0; font-size: 14px; }
 .notif-backdrop {

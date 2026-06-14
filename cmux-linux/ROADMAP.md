@@ -56,6 +56,10 @@ construction, not feature parity with the macOS app.
 - [x] **In-app browser pane** — split a webview browser alongside terminals
       (`ctrl+shift+b` / `cmux browser <url>`), with a URL bar and `cmux navigate`.
       A scriptable browser API remains a follow-up.
+- [x] **Divider drag-to-resize** — split boundaries render as draggable handles
+      that adjust the split ratio live (core `dividers`/`set_ratio_by_index`
+      tested; the mouse interaction itself is pending visual verification on a
+      Fedora desktop).
 
 ## In progress
 
@@ -63,10 +67,8 @@ construction, not feature parity with the macOS app.
 
 ## Planned
 
-- [ ] Pane drag-to-reorder and divider drag-to-resize (mouse-driven; the engine
-      ops `reorder_tab`/`set_ratio_for` exist and are scriptable via the CLI).
-- [ ] Scriptable browser API (upstream's agent-browser port) on top of the
-      browser pane.
+- [ ] Tab drag-to-reorder (engine `reorder_tab` exists and is CLI-scriptable).
+- [ ] Scriptable browser API (upstream's agent-browser port) on the browser pane.
 
 ## Out of scope (no Linux equivalent / deliberately dropped for v1)
 
