@@ -446,6 +446,33 @@ impl Engine {
                 self.mark_all_read();
                 Response::Ok
             }
+            Request::RenameTab { tab, title } => {
+                if self.state.rename_tab(tab, title) {
+                    Response::Ok
+                } else {
+                    Response::error("no such tab")
+                }
+            }
+            Request::RenameWorkspace { workspace, title } => {
+                if self.state.rename_workspace(workspace, title) {
+                    Response::Ok
+                } else {
+                    Response::error("no such workspace")
+                }
+            }
+            Request::ReorderTab { tab, index } => {
+                match self.state.locate_tab_workspace(tab) {
+                    Some(ws) if self.state.reorder_tab(ws, tab, index) => Response::Ok,
+                    _ => Response::error("no such tab"),
+                }
+            }
+            Request::ResizePane { pane, rows, cols } => {
+                if self.resize_pane(pane, rows, cols) {
+                    Response::Ok
+                } else {
+                    Response::error("no such pane")
+                }
+            }
         }
     }
 

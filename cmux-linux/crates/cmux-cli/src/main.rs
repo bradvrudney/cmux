@@ -32,6 +32,10 @@ COMMANDS:
     snapshot <pane>                   Print a pane's screen as text
     notifications                     List the notification feed
     mark-read                         Mark all notifications read
+    rename-tab <tab> <title>          Rename a tab
+    rename-workspace <ws> <title>     Rename a workspace
+    reorder-tab <tab> <index>         Move a tab within its workspace
+    resize <pane> <rows> <cols>       Resize a pane's PTY/grid
     config get [path]                 Read config (whole tree or dotted path)
     config set <path> <value>         Set a config value
 
@@ -115,6 +119,50 @@ fn parse(args: &[String]) -> Result<Option<Request>, String> {
         "list-workspaces" | "ls" => Request::ListWorkspaces,
         "notifications" | "notes" => Request::ListNotifications,
         "mark-read" => Request::MarkAllRead,
+        "rename-tab" => {
+            let tab = rest.first().ok_or("rename-tab requires a tab id")?;
+            let title = rest.get(1..).map(|s| s.join(" ")).unwrap_or_default();
+            if title.is_empty() {
+                return Err("rename-tab requires a title".into());
+            }
+            Request::RenameTab {
+                tab: TabId(parse_id(tab)?),
+                title,
+            }
+        }
+        "rename-workspace" => {
+            let ws = rest.first().ok_or("rename-workspace requires a workspace id")?;
+            let title = rest.get(1..).map(|s| s.join(" ")).unwrap_or_default();
+            if title.is_empty() {
+                return Err("rename-workspace requires a title".into());
+            }
+            Request::RenameWorkspace {
+                workspace: WorkspaceId(parse_id(ws)?),
+                title,
+            }
+        }
+        "reorder-tab" => {
+            let tab = rest.first().ok_or("reorder-tab requires a tab id")?;
+            let index = rest
+                .get(1)
+                .ok_or("reorder-tab requires an index")?
+                .parse::<usize>()
+                .map_err(|_| "index must be a number")?;
+            Request::ReorderTab {
+                tab: TabId(parse_id(tab)?),
+                index,
+            }
+        }
+        "resize" => {
+            let pane = rest.first().ok_or("resize requires a pane id")?;
+            let rows = rest.get(1).ok_or("resize requires rows")?.parse::<u16>().map_err(|_| "rows must be a number")?;
+            let cols = rest.get(2).ok_or("resize requires cols")?.parse::<u16>().map_err(|_| "cols must be a number")?;
+            Request::ResizePane {
+                pane: PaneId(parse_id(pane)?),
+                rows,
+                cols,
+            }
+        }
         "send" => {
             let (pane, positional) = take_pane_flag(rest);
             let data = positional.join(" ");
@@ -440,6 +488,33 @@ mod tests {
             parse(&argv(&["mark-read"])).unwrap(),
             Some(Request::MarkAllRead)
         );
+    }
+
+    #[test]
+    fn rename_and_reorder() {
+        assert_eq!(
+            parse(&argv(&["rename-tab", "tab:3", "my", "build"])).unwrap(),
+            Some(Request::RenameTab {
+                tab: TabId(3),
+                title: "my build".into()
+            })
+        );
+        assert_eq!(
+            parse(&argv(&["reorder-tab", "tab:3", "0"])).unwrap(),
+            Some(Request::ReorderTab {
+                tab: TabId(3),
+                index: 0
+            })
+        );
+        assert_eq!(
+            parse(&argv(&["resize", "surface:2", "40", "120"])).unwrap(),
+            Some(Request::ResizePane {
+                pane: PaneId(2),
+                rows: 40,
+                cols: 120
+            })
+        );
+        assert!(parse(&argv(&["rename-tab", "tab:3"])).is_err());
     }
 
     #[test]

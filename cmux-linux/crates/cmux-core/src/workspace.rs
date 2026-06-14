@@ -303,6 +303,28 @@ impl AppState {
         true
     }
 
+    /// Rename a tab. Returns `true` if the tab exists.
+    pub fn rename_tab(&mut self, tab: TabId, title: impl Into<String>) -> bool {
+        for w in &mut self.workspaces {
+            if let Some(t) = w.tabs.iter_mut().find(|t| t.id == tab) {
+                t.title = title.into();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Rename a workspace. Returns `true` if it exists.
+    pub fn rename_workspace(&mut self, ws: WorkspaceId, title: impl Into<String>) -> bool {
+        match self.workspace_mut(ws) {
+            Some(w) => {
+                w.title = title.into();
+                true
+            }
+            None => false,
+        }
+    }
+
     // ---- notifications --------------------------------------------------
 
     /// Raise an attention notification on a pane and set its ring. Returns the
@@ -461,6 +483,17 @@ mod tests {
         assert!(s.focus_pane(bg_pane));
         assert_eq!(s.pane(bg_pane).unwrap().ring, RingState::Idle);
         assert_eq!(s.notifications.unread_count(), 0);
+    }
+
+    #[test]
+    fn rename_tab_and_workspace() {
+        let (mut s, ws) = seeded();
+        let t = s.workspace(ws).unwrap().tabs[0].id;
+        assert!(s.rename_tab(t, "build"));
+        assert_eq!(s.workspace(ws).unwrap().tabs[0].title, "build");
+        assert!(s.rename_workspace(ws, "myproj"));
+        assert_eq!(s.workspace(ws).unwrap().title, "myproj");
+        assert!(!s.rename_tab(TabId(999), "x"));
     }
 
     #[test]

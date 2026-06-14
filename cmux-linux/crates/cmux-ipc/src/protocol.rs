@@ -86,6 +86,14 @@ pub enum Request {
     ListNotifications,
     /// Mark every notification as read (clears the unread badge).
     MarkAllRead,
+    /// Rename a tab.
+    RenameTab { tab: TabId, title: String },
+    /// Rename a workspace.
+    RenameWorkspace { workspace: WorkspaceId, title: String },
+    /// Move a tab to a new index within its workspace.
+    ReorderTab { tab: TabId, index: usize },
+    /// Resize a pane's PTY/grid (rows × cols).
+    ResizePane { pane: PaneId, rows: u16, cols: u16 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
