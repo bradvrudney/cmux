@@ -8,8 +8,9 @@
 //! the upstream project insists on.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cmux_config::Config;
 use cmux_core::ids::PaneId;
@@ -42,20 +43,64 @@ pub struct Engine {
     pub state: AppState,
     pub config: Config,
     runtimes: HashMap<PaneId, PaneRuntime>,
+    /// Where the topology is persisted; `None` disables persistence (tests).
+    session_path: Option<PathBuf>,
+    last_save: Instant,
 }
 
 impl Engine {
-    /// Build an engine seeded with one workspace and spawn its pane's shell.
+    /// Build an engine, restoring the saved session if one exists (otherwise
+    /// seeding a fresh workspace), and spawn shells for every pane.
     pub fn new(config: Config) -> Self {
-        let mut state = AppState::new();
-        state.new_workspace("workspace");
+        Self::with_session(config, Self::default_session_path())
+    }
+
+    /// Like [`Engine::new`] but with an explicit (or no) persistence path.
+    pub fn with_session(config: Config, session_path: Option<PathBuf>) -> Self {
+        let state = session_path
+            .as_ref()
+            .and_then(|p| Self::load_state(p))
+            .filter(|s| !s.workspaces.is_empty())
+            .unwrap_or_else(|| {
+                let mut s = AppState::new();
+                s.new_workspace("workspace");
+                s
+            });
         let mut engine = Engine {
             state,
             config,
             runtimes: HashMap::new(),
+            session_path,
+            last_save: Instant::now(),
         };
         engine.ensure_runtimes();
         engine
+    }
+
+    /// `$XDG_DATA_HOME/cmux/session.json`, falling back to
+    /// `~/.local/share/cmux/session.json`.
+    pub fn default_session_path() -> Option<PathBuf> {
+        let base = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))?;
+        Some(base.join("cmux").join("session.json"))
+    }
+
+    fn load_state(path: &PathBuf) -> Option<AppState> {
+        let text = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    /// Persist the current topology (not live PTYs — those respawn on restore).
+    pub fn save_session(&self) {
+        let Some(path) = &self.session_path else { return };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string_pretty(&self.state) {
+            let _ = std::fs::write(path, json);
+        }
     }
 
     fn now_ms() -> u64 {
@@ -133,6 +178,11 @@ impl Engine {
             for pane in bells {
                 self.state.notify(pane, "Bell", "terminal bell", now);
             }
+        }
+        // Persist topology periodically so a crash/restart restores the layout.
+        if self.session_path.is_some() && self.last_save.elapsed() > Duration::from_secs(5) {
+            self.save_session();
+            self.last_save = Instant::now();
         }
         total
     }
@@ -428,7 +478,8 @@ mod tests {
     use cmux_ipc::protocol::SplitDir;
 
     fn engine() -> Engine {
-        Engine::new(Config::default())
+        // No persistence path → tests don't touch the real session file.
+        Engine::with_session(Config::default(), None)
     }
 
     #[test]
@@ -544,6 +595,32 @@ mod tests {
         e.state.notify(bg, "Claude", "ping", 1);
         assert!(e.dispatch_action("jumpToLatestNotification"));
         assert_eq!(e.state.focused_pane(), Some(bg));
+    }
+
+    #[test]
+    fn session_roundtrips_topology() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cmux").join("session.json");
+        let mut e = Engine::with_session(Config::default(), Some(path.clone()));
+        e.dispatch_action("splitHorizontal");
+        e.new_tab();
+        let ws_count = e.state.workspaces.len();
+        let pane_count = e.state.panes.len();
+        e.save_session();
+        assert!(path.exists());
+
+        // A fresh engine restores the same topology and respawns runtimes.
+        let e2 = Engine::with_session(Config::default(), Some(path));
+        assert_eq!(e2.state.workspaces.len(), ws_count);
+        assert_eq!(e2.state.panes.len(), pane_count);
+        let pane = e2.state.focused_pane().unwrap();
+        assert!(e2.terminal(pane).is_some());
+    }
+
+    #[test]
+    fn no_session_path_means_fresh_workspace() {
+        let e = Engine::with_session(Config::default(), None);
+        assert_eq!(e.state.workspaces.len(), 1);
     }
 
     #[test]

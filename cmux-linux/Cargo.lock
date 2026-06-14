@@ -420,6 +420,7 @@ dependencies = [
  "cmux-term",
  "dioxus",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
