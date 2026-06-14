@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cmux-core",
+    "crates/cmux-config",
+    "crates/cmux-term",
+    "crates/cmux-pty",
+    "crates/cmux-ipc",
+    "crates/cmux-cli", "crates/cmux-gui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+repository = "https://github.com/manaflow-ai/cmux"
+authors = ["cmux-linux contributors"]
+
+[workspace.dependencies]
+cmux-core = { path = "crates/cmux-core" }
+cmux-config = { path = "crates/cmux-config" }
+cmux-term = { path = "crates/cmux-term" }
+cmux-pty = { path = "crates/cmux-pty" }
+cmux-ipc = { path = "crates/cmux-ipc" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"

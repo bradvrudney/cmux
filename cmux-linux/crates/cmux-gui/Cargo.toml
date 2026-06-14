@@ -1,0 +1,23 @@
+[package]
+name = "cmux-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The cmux-linux desktop application (Dioxus over WebKitGTK)."
+
+[[bin]]
+name = "cmux-gui"
+path = "src/main.rs"
+
+[dependencies]
+cmux-core = { workspace = true }
+cmux-config = { workspace = true }
+cmux-term = { workspace = true }
+cmux-pty = { workspace = true }
+cmux-ipc = { workspace = true }
+serde_json = { workspace = true }
+dioxus = { version = "0.6", features = ["desktop"] }
+tokio = { version = "1", features = ["time", "rt"] }

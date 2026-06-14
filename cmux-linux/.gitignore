@@ -1,0 +1,7 @@
+# Rust build artifacts (any crate, any depth)
+target/
+**/*.rs.bk
+
+# Editor / OS
+*.swp
+.DS_Store

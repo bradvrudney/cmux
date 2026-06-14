@@ -1,0 +1,19 @@
+[package]
+name = "cmux-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The cmux CLI: drive a running cmux-linux app over its control socket."
+
+[[bin]]
+name = "cmux"
+path = "src/main.rs"
+
+[dependencies]
+cmux-core = { workspace = true }
+cmux-ipc = { workspace = true }
+cmux-config = { workspace = true }
+serde_json = { workspace = true }

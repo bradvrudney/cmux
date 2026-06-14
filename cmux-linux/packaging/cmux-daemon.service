@@ -1,0 +1,16 @@
+[Unit]
+Description=cmux control socket daemon
+Documentation=https://github.com/manaflow-ai/cmux
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# The GUI binary hosts the control socket; this unit is for headless/agent use
+# where you want the socket available without the window manager launching it.
+ExecStart=%h/.local/bin/cmux-gui --headless
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

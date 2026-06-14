@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=cmux
+GenericName=Terminal Multiplexer
+Comment=Terminal multiplexer with vertical tabs and agent notifications
+Exec=cmux-gui
+Icon=cmux
+Terminal=false
+Categories=System;TerminalEmulator;Development;
+Keywords=terminal;shell;tmux;tabs;agents;
+StartupNotify=true

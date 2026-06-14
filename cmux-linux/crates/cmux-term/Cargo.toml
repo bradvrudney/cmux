@@ -1,0 +1,13 @@
+[package]
+name = "cmux-term"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "VT/ANSI terminal-emulation grid for cmux-linux panes."
+
+[dependencies]
+vte = "0.15.0"
+serde = { workspace = true }

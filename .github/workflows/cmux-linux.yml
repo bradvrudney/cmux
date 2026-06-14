@@ -1,0 +1,45 @@
+name: cmux-linux (Fedora)
+
+# Builds and tests the Rust/Dioxus Fedora port. Scoped to cmux-linux/** so it
+# is independent of the macOS app's workflows.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cmux-linux/**"
+      - ".github/workflows/cmux-linux.yml"
+  pull_request:
+    paths:
+      - "cmux-linux/**"
+      - ".github/workflows/cmux-linux.yml"
+
+jobs:
+  build-test:
+    name: build & test on Fedora
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:41
+    defaults:
+      run:
+        working-directory: cmux-linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          dnf install -y \
+            rust cargo gcc \
+            gtk3-devel webkit2gtk4.1-devel libxdo-devel \
+            pkgconf-pkg-config
+
+      - name: Cargo version
+        run: cargo --version && rustc --version
+
+      - name: Build (all crates)
+        run: cargo build --workspace --locked || cargo build --workspace
+
+      - name: Test (all crates)
+        run: cargo test --workspace
+
+      - name: Clippy (warnings only, non-blocking)
+        run: cargo clippy --workspace || true

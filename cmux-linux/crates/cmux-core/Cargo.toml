@@ -1,0 +1,15 @@
+[package]
+name = "cmux-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Topology model for cmux-linux: workspaces, vertical tabs, split tree, focus, notifications."
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

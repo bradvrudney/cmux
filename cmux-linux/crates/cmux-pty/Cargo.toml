@@ -1,0 +1,14 @@
+[package]
+name = "cmux-pty"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "PTY-backed process hosting for cmux-linux panes."
+
+[dependencies]
+portable-pty = "0.9"
+thiserror = { workspace = true }
+tracing = { workspace = true }
