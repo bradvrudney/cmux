@@ -157,12 +157,46 @@ impl Screen {
         }
     }
 
-    /// Scroll the whole grid up by one line; the top line is lost and a fresh
-    /// blank line appears at the bottom.
-    fn scroll_up(&mut self) {
-        self.cells.rotate_left(self.cols);
-        let last = self.rows - 1;
-        self.clear_row(last);
+    /// Scroll the inclusive row range `[top, bottom]` up by `n` lines. Lines at
+    /// the top of the region are lost; `n` blank lines appear at the bottom.
+    fn scroll_region_up(&mut self, top: usize, bottom: usize, n: usize) {
+        if top > bottom || bottom >= self.rows {
+            return;
+        }
+        let region_rows = bottom - top + 1;
+        let n = n.min(region_rows);
+        for r in top..=bottom {
+            let src = r + n;
+            if src <= bottom {
+                for c in 0..self.cols {
+                    let v = self.cells[src * self.cols + c];
+                    self.cells[r * self.cols + c] = v;
+                }
+            } else {
+                self.clear_row(r);
+            }
+        }
+    }
+
+    /// Scroll the inclusive row range `[top, bottom]` down by `n` lines. Lines at
+    /// the bottom of the region are lost; `n` blank lines appear at the top.
+    fn scroll_region_down(&mut self, top: usize, bottom: usize, n: usize) {
+        if top > bottom || bottom >= self.rows {
+            return;
+        }
+        let region_rows = bottom - top + 1;
+        let n = n.min(region_rows);
+        for r in (top..=bottom).rev() {
+            if r >= top + n {
+                let src = r - n;
+                for c in 0..self.cols {
+                    let v = self.cells[src * self.cols + c];
+                    self.cells[r * self.cols + c] = v;
+                }
+            } else {
+                self.clear_row(r);
+            }
+        }
     }
 
     /// Resize the grid, preserving content where it fits (top-left anchored)
@@ -208,23 +242,57 @@ pub struct Terminal {
     state: TermState,
 }
 
+/// A saved cursor position (DECSC / `ESC [ s`).
+#[derive(Debug, Clone, Copy, Default)]
+struct SavedCursor {
+    row: usize,
+    col: usize,
+}
+
 /// The mutable emulator state that implements [`vte::Perform`]. Kept separate
 /// from the [`Parser`] so the borrow checker is satisfied in [`Terminal::feed`].
 struct TermState {
     screen: Screen,
     pen: Pen,
     bell: bool,
+    /// Top scroll margin (0-based, inclusive).
+    scroll_top: usize,
+    /// Bottom scroll margin (0-based, inclusive).
+    scroll_bottom: usize,
+    /// Saved cursor for DECSC/DECRC and CSI s/u.
+    saved_cursor: SavedCursor,
+    /// Whether autowrap (DECAWM, `?7`) is enabled. Default on.
+    autowrap: bool,
+    /// Deferred-wrap latch: set after printing into the last column. The next
+    /// printable char wraps to the next line before being written.
+    pending_wrap: bool,
+    /// Set while the alternate screen buffer is active.
+    alt_active: bool,
+    /// Saved primary screen while the alt buffer is active.
+    saved_primary: Option<Screen>,
+    /// Saved cursor/pen for the `?1049` alt-screen enter (restored on leave).
+    saved_alt_cursor: SavedCursor,
 }
 
 impl Terminal {
     /// Create a terminal with a blank `rows` x `cols` screen.
     pub fn new(rows: usize, cols: usize) -> Self {
+        let screen = Screen::new(rows, cols);
+        let bottom = screen.rows() - 1;
         Terminal {
             parser: Parser::new(),
             state: TermState {
-                screen: Screen::new(rows, cols),
+                screen,
                 pen: Pen::default(),
                 bell: false,
+                scroll_top: 0,
+                scroll_bottom: bottom,
+                saved_cursor: SavedCursor::default(),
+                autowrap: true,
+                pending_wrap: false,
+                alt_active: false,
+                saved_primary: None,
+                saved_alt_cursor: SavedCursor::default(),
             },
         }
     }
@@ -238,6 +306,20 @@ impl Terminal {
     /// and content is preserved where it fits.
     pub fn resize(&mut self, rows: usize, cols: usize) {
         self.state.screen.resize(rows, cols);
+        if let Some(primary) = self.state.saved_primary.as_mut() {
+            primary.resize(rows, cols);
+        }
+        // Reset the scroll region to the full (new) screen and clear any
+        // deferred wrap so it can't reference a column past the new bounds.
+        self.state.scroll_top = 0;
+        self.state.scroll_bottom = self.state.screen.rows() - 1;
+        self.state.pending_wrap = false;
+    }
+
+    /// Whether the alternate screen buffer is currently active (vim/less/htop).
+    #[inline]
+    pub fn is_alt_screen(&self) -> bool {
+        self.state.alt_active
     }
 
     #[inline]
@@ -307,36 +389,223 @@ impl Terminal {
 }
 
 impl TermState {
-    /// Move the cursor to the next line, scrolling if already on the last row.
+    /// Index (line down). Move the cursor down one line; if at the bottom
+    /// margin, scroll the scroll region up by one. Honors the scroll region.
     fn line_feed(&mut self) {
+        let top = self.scroll_top;
+        let bottom = self.scroll_bottom;
         let s = &mut self.screen;
-        if s.cursor.row + 1 >= s.rows {
-            s.scroll_up();
-        } else {
+        if s.cursor.row == bottom {
+            s.scroll_region_up(top, bottom, 1);
+        } else if s.cursor.row + 1 < s.rows {
             s.cursor.row += 1;
         }
     }
 
-    /// Write a character at the cursor and advance, wrapping at end of row.
+    /// Reverse Index (RI, `ESC M`). Move the cursor up one line; if at the top
+    /// margin, scroll the scroll region down by one.
+    fn reverse_index(&mut self) {
+        let top = self.scroll_top;
+        let bottom = self.scroll_bottom;
+        let s = &mut self.screen;
+        if s.cursor.row == top {
+            s.scroll_region_down(top, bottom, 1);
+        } else if s.cursor.row > 0 {
+            s.cursor.row -= 1;
+        }
+    }
+
+    /// Write a character at the cursor and advance, with deferred (pending)
+    /// autowrap at the end of a row.
     fn write_char(&mut self, c: char) {
         let (fg, bg, flags) = (self.pen.fg, self.pen.bg, self.pen.flags);
-        let s = &mut self.screen;
-        // If past the last column, wrap to the start of the next line first.
-        if s.cursor.col >= s.cols {
-            s.cursor.col = 0;
-            if s.cursor.row + 1 >= s.rows {
-                s.scroll_up();
-            } else {
-                s.cursor.row += 1;
+
+        // Resolve any deferred wrap from the previous print before writing.
+        if self.pending_wrap {
+            self.pending_wrap = false;
+            if self.autowrap {
+                self.screen.cursor.col = 0;
+                self.line_feed();
             }
         }
-        let (row, col) = (s.cursor.row, s.cursor.col);
-        let cell = s.cell_mut(row, col);
-        cell.c = c;
-        cell.fg = fg;
-        cell.bg = bg;
-        cell.flags = flags;
-        s.cursor.col += 1;
+
+        let cols = self.screen.cols;
+        // Without autowrap, printing in the last column overwrites in place.
+        let col = self.screen.cursor.col.min(cols - 1);
+        let row = self.screen.cursor.row;
+        {
+            let cell = self.screen.cell_mut(row, col);
+            cell.c = c;
+            cell.fg = fg;
+            cell.bg = bg;
+            cell.flags = flags;
+        }
+
+        if col + 1 >= cols {
+            // At the last column: latch a pending wrap (autowrap) or stay put.
+            if self.autowrap {
+                self.screen.cursor.col = cols - 1;
+                self.pending_wrap = true;
+            } else {
+                self.screen.cursor.col = cols - 1;
+            }
+        } else {
+            self.screen.cursor.col = col + 1;
+        }
+    }
+
+    /// Set the scroll region from 1-based, inclusive params (DECSTBM). Empty
+    /// params reset to the full screen. Moves the cursor to the region home.
+    fn set_scroll_region(&mut self, top: u16, bottom: u16) {
+        let rows = self.screen.rows;
+        let (mut t, mut b) = if top == 0 && bottom == 0 {
+            (0, rows - 1)
+        } else {
+            let t = (top.max(1) as usize - 1).min(rows - 1);
+            let b = if bottom == 0 {
+                rows - 1
+            } else {
+                (bottom as usize - 1).min(rows - 1)
+            };
+            (t, b)
+        };
+        if t >= b {
+            // Invalid region: reset to full screen.
+            t = 0;
+            b = rows - 1;
+        }
+        self.scroll_top = t;
+        self.scroll_bottom = b;
+        // DECSTBM homes the cursor.
+        self.screen.cursor.row = 0;
+        self.screen.cursor.col = 0;
+        self.pending_wrap = false;
+    }
+
+    /// Insert `n` blank lines at the cursor row, within the scroll region (IL).
+    fn insert_lines(&mut self, n: usize) {
+        let row = self.screen.cursor.row;
+        if row < self.scroll_top || row > self.scroll_bottom {
+            return;
+        }
+        let bottom = self.scroll_bottom;
+        self.screen.scroll_region_down(row, bottom, n);
+        self.pending_wrap = false;
+    }
+
+    /// Delete `n` lines at the cursor row, within the scroll region (DL).
+    fn delete_lines(&mut self, n: usize) {
+        let row = self.screen.cursor.row;
+        if row < self.scroll_top || row > self.scroll_bottom {
+            return;
+        }
+        let bottom = self.scroll_bottom;
+        self.screen.scroll_region_up(row, bottom, n);
+        self.pending_wrap = false;
+    }
+
+    /// Insert `n` blank cells at the cursor, shifting the rest of the line right
+    /// (ICH). Cells shifted past the end are lost.
+    fn insert_chars(&mut self, n: usize) {
+        let cols = self.screen.cols;
+        let row = self.screen.cursor.row;
+        let col = self.screen.cursor.col.min(cols - 1);
+        let n = n.min(cols - col);
+        for c in (col..cols).rev() {
+            if c >= col + n {
+                let v = *self.screen.cell(row, c - n);
+                *self.screen.cell_mut(row, c) = v;
+            } else {
+                self.screen.cell_mut(row, c).reset();
+            }
+        }
+        self.pending_wrap = false;
+    }
+
+    /// Delete `n` cells at the cursor, shifting the rest of the line left (DCH).
+    /// Blanks fill in at the end of the line.
+    fn delete_chars(&mut self, n: usize) {
+        let cols = self.screen.cols;
+        let row = self.screen.cursor.row;
+        let col = self.screen.cursor.col.min(cols - 1);
+        let n = n.min(cols - col);
+        for c in col..cols {
+            if c + n < cols {
+                let v = *self.screen.cell(row, c + n);
+                *self.screen.cell_mut(row, c) = v;
+            } else {
+                self.screen.cell_mut(row, c).reset();
+            }
+        }
+        self.pending_wrap = false;
+    }
+
+    /// Erase `n` cells at the cursor in place, without shifting (ECH).
+    fn erase_chars(&mut self, n: usize) {
+        let cols = self.screen.cols;
+        let row = self.screen.cursor.row;
+        let col = self.screen.cursor.col.min(cols - 1);
+        let end = (col + n).min(cols);
+        for c in col..end {
+            self.screen.cell_mut(row, c).reset();
+        }
+        self.pending_wrap = false;
+    }
+
+    /// Enter the alternate screen buffer. `save_cursor` corresponds to `?1049`
+    /// (vs `?47`/`?1047` which do not save the cursor).
+    fn enter_alt_screen(&mut self, save_cursor: bool) {
+        if self.alt_active {
+            return;
+        }
+        if save_cursor {
+            self.saved_alt_cursor = SavedCursor {
+                row: self.screen.cursor.row,
+                col: self.screen.cursor.col,
+            };
+        }
+        let (rows, cols) = (self.screen.rows, self.screen.cols);
+        let mut primary = Screen::new(rows, cols);
+        std::mem::swap(&mut primary, &mut self.screen);
+        self.saved_primary = Some(primary);
+        self.alt_active = true;
+        self.pending_wrap = false;
+    }
+
+    /// Leave the alternate screen buffer, restoring the primary buffer.
+    /// `restore_cursor` corresponds to `?1049`.
+    fn leave_alt_screen(&mut self, restore_cursor: bool) {
+        if !self.alt_active {
+            return;
+        }
+        if let Some(primary) = self.saved_primary.take() {
+            self.screen = primary;
+        }
+        if restore_cursor {
+            let rows = self.screen.rows;
+            let cols = self.screen.cols;
+            self.screen.cursor.row = self.saved_alt_cursor.row.min(rows - 1);
+            self.screen.cursor.col = self.saved_alt_cursor.col.min(cols - 1);
+        }
+        self.alt_active = false;
+        self.pending_wrap = false;
+    }
+
+    /// DECSC / CSI s: save the cursor position.
+    fn save_cursor(&mut self) {
+        self.saved_cursor = SavedCursor {
+            row: self.screen.cursor.row,
+            col: self.screen.cursor.col,
+        };
+    }
+
+    /// DECRC / CSI u: restore the saved cursor position.
+    fn restore_cursor(&mut self) {
+        let rows = self.screen.rows;
+        let cols = self.screen.cols;
+        self.screen.cursor.row = self.saved_cursor.row.min(rows - 1);
+        self.screen.cursor.col = self.saved_cursor.col.min(cols - 1);
+        self.pending_wrap = false;
     }
 
     fn apply_sgr(&mut self, params: &Params) {
@@ -356,10 +625,11 @@ impl TermState {
             match code {
                 0 => self.pen = Pen::default(),
                 1 => self.pen.flags.bold = true,
+                2 => {} // faint: accepted, not visually distinct here
                 3 => self.pen.flags.italic = true,
                 4 => self.pen.flags.underline = true,
                 7 => self.pen.flags.inverse = true,
-                22 => self.pen.flags.bold = false,
+                22 => self.pen.flags.bold = false, // normal intensity (clears bold/faint)
                 23 => self.pen.flags.italic = false,
                 24 => self.pen.flags.underline = false,
                 27 => self.pen.flags.inverse = false,
@@ -481,20 +751,49 @@ impl Perform for TermState {
 
     fn execute(&mut self, byte: u8) {
         match byte {
-            b'\n' | 0x0b | 0x0c => self.line_feed(), // LF, VT, FF -> line down
-            b'\r' => self.screen.cursor.col = 0,
+            b'\n' | 0x0b | 0x0c => {
+                self.pending_wrap = false;
+                self.line_feed();
+            }
+            b'\r' => {
+                self.pending_wrap = false;
+                self.screen.cursor.col = 0;
+            }
             b'\t' => {
+                self.pending_wrap = false;
                 let s = &mut self.screen;
                 let next = ((s.cursor.col / 8) + 1) * 8;
                 s.cursor.col = next.min(s.cols - 1);
             }
             0x08 => {
+                self.pending_wrap = false;
                 let s = &mut self.screen;
                 if s.cursor.col > 0 {
                     s.cursor.col -= 1;
                 }
             }
             0x07 => self.bell = true, // BEL
+            _ => {}
+        }
+    }
+
+    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8) {
+        match byte {
+            b'7' => self.save_cursor(),    // DECSC
+            b'8' => self.restore_cursor(), // DECRC
+            b'D' => {
+                self.pending_wrap = false;
+                self.line_feed();
+            } // IND
+            b'E' => {
+                self.pending_wrap = false;
+                self.screen.cursor.col = 0;
+                self.line_feed();
+            } // NEL
+            b'M' => {
+                self.pending_wrap = false;
+                self.reverse_index();
+            } // RI
             _ => {}
         }
     }
@@ -506,29 +805,35 @@ impl Perform for TermState {
         _ignore: bool,
         action: char,
     ) {
+        // Cursor moves and edits clear any deferred wrap latch.
         match action {
             'A' => {
+                self.pending_wrap = false;
                 let n = param_or(params, 1) as usize;
                 let s = &mut self.screen;
                 s.cursor.row = s.cursor.row.saturating_sub(n);
             }
             'B' => {
+                self.pending_wrap = false;
                 let n = param_or(params, 1) as usize;
                 let s = &mut self.screen;
                 s.cursor.row = (s.cursor.row + n).min(s.rows - 1);
             }
             'C' => {
+                self.pending_wrap = false;
                 let n = param_or(params, 1) as usize;
                 let s = &mut self.screen;
                 s.cursor.col = (s.cursor.col + n).min(s.cols - 1);
             }
             'D' => {
+                self.pending_wrap = false;
                 let n = param_or(params, 1) as usize;
                 let s = &mut self.screen;
                 s.cursor.col = s.cursor.col.saturating_sub(n);
             }
             'H' | 'f' => {
                 // CUP / HVP: 1-based row;col -> 0-based.
+                self.pending_wrap = false;
                 let row = nth_param(params, 0).unwrap_or(1) as usize - 1;
                 let col = nth_param(params, 1).unwrap_or(1) as usize - 1;
                 let s = &mut self.screen;
@@ -537,13 +842,42 @@ impl Perform for TermState {
             }
             'J' => self.erase_display(first_param_raw(params)),
             'K' => self.erase_line(first_param_raw(params)),
+            'L' => self.insert_lines(param_or(params, 1) as usize), // IL
+            'M' => self.delete_lines(param_or(params, 1) as usize), // DL
+            '@' => self.insert_chars(param_or(params, 1) as usize), // ICH
+            'P' => self.delete_chars(param_or(params, 1) as usize), // DCH
+            'X' => self.erase_chars(param_or(params, 1) as usize),  // ECH
+            'r' => {
+                // DECSTBM: set top/bottom scroll margins (1-based, inclusive).
+                let top = nth_param(params, 0).unwrap_or(0);
+                let bottom = nth_param(params, 1).unwrap_or(0);
+                self.set_scroll_region(top, bottom);
+            }
+            's' => self.save_cursor(),    // SCOSC
+            'u' => self.restore_cursor(), // SCORC
             'm' => self.apply_sgr(params),
             'h' | 'l' if intermediates.first() == Some(&b'?') => {
-                // DEC private mode set/reset. Handle DECTCEM (?25) visibility.
-                let show = action == 'h';
+                // DEC private mode set/reset.
+                let set = action == 'h';
                 for p in params.iter() {
-                    if p.first() == Some(&25) {
-                        self.screen.cursor.visible = show;
+                    match p.first().copied() {
+                        Some(7) => self.autowrap = set, // DECAWM
+                        Some(25) => self.screen.cursor.visible = set, // DECTCEM
+                        Some(47) | Some(1047) => {
+                            if set {
+                                self.enter_alt_screen(false);
+                            } else {
+                                self.leave_alt_screen(false);
+                            }
+                        }
+                        Some(1049) => {
+                            if set {
+                                self.enter_alt_screen(true);
+                            } else {
+                                self.leave_alt_screen(true);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -732,5 +1066,214 @@ mod tests {
         assert_eq!(r0[0].c, 'h');
         assert_eq!(r0[1].c, 'i');
         assert_eq!(r0[2].c, ' ');
+    }
+
+    // ---- New behavior tests ----
+
+    fn row_str(t: &Terminal, n: usize) -> String {
+        t.row(n)
+            .iter()
+            .map(|c| c.c)
+            .collect::<String>()
+            .trim_end_matches(' ')
+            .to_string()
+    }
+
+    #[test]
+    fn alt_screen_save_and_restore() {
+        let mut t = Terminal::new(5, 20);
+        t.feed(b"primary");
+        assert!(!t.is_alt_screen());
+        // Enter alternate screen (1049): saves primary + cursor, clears alt.
+        t.feed(b"\x1b[?1049h");
+        assert!(t.is_alt_screen());
+        assert_eq!(row_str(&t, 0), ""); // alt buffer starts blank
+        t.feed(b"\x1b[1;1Halt");
+        assert_eq!(row_str(&t, 0), "alt");
+        // Leave: primary content restored, cursor restored.
+        t.feed(b"\x1b[?1049l");
+        assert!(!t.is_alt_screen());
+        assert_eq!(row_str(&t, 0), "primary");
+        assert_eq!(t.cursor().col, 7);
+        assert_eq!(t.cursor().row, 0);
+    }
+
+    #[test]
+    fn alt_screen_47_no_cursor_save() {
+        let mut t = Terminal::new(5, 20);
+        t.feed(b"primary");
+        t.feed(b"\x1b[?47h");
+        assert!(t.is_alt_screen());
+        t.feed(b"alt");
+        assert_eq!(row_str(&t, 0), "alt");
+        t.feed(b"\x1b[?47l");
+        assert!(!t.is_alt_screen());
+        assert_eq!(row_str(&t, 0), "primary");
+    }
+
+    #[test]
+    fn decsc_decrc_save_restore_cursor() {
+        let mut t = Terminal::new(10, 10);
+        t.feed(b"\x1b[3;5H"); // row 2 col 4
+        t.feed(b"\x1b7"); // DECSC
+        t.feed(b"\x1b[8;8H"); // move elsewhere row 7 col 7
+        assert_eq!(t.cursor().row, 7);
+        assert_eq!(t.cursor().col, 7);
+        t.feed(b"\x1b8"); // DECRC
+        assert_eq!(t.cursor().row, 2);
+        assert_eq!(t.cursor().col, 4);
+    }
+
+    #[test]
+    fn csi_s_u_save_restore_cursor() {
+        let mut t = Terminal::new(10, 10);
+        t.feed(b"\x1b[2;3H"); // row 1 col 2
+        t.feed(b"\x1b[s"); // save
+        t.feed(b"\x1b[9;9H");
+        t.feed(b"\x1b[u"); // restore
+        assert_eq!(t.cursor().row, 1);
+        assert_eq!(t.cursor().col, 2);
+    }
+
+    #[test]
+    fn scroll_region_only_scrolls_region() {
+        // 6 rows. Margins rows 2..4 (1-based) -> 0-based 1..3.
+        let mut t = Terminal::new(6, 10);
+        t.feed(b"r0\r\nr1\r\nr2\r\nr3\r\nr4\r\nr5");
+        t.feed(b"\x1b[2;4r"); // DECSTBM rows 2..4 (homes cursor to 0,0)
+        // Move to bottom margin (row 3, 0-based) and line feed to scroll region.
+        t.feed(b"\x1b[4;1H"); // row 3 col 0
+        t.feed(b"\nNEW");
+        // Rows outside the region are untouched.
+        assert_eq!(row_str(&t, 0), "r0");
+        assert_eq!(row_str(&t, 4), "r4");
+        assert_eq!(row_str(&t, 5), "r5");
+        // Region scrolled up: old r2 gone, r3 moved up, NEW at bottom margin.
+        assert_eq!(row_str(&t, 1), "r2");
+        assert_eq!(row_str(&t, 2), "r3");
+        assert_eq!(row_str(&t, 3), "NEW");
+    }
+
+    #[test]
+    fn reverse_index_scrolls_region_down_at_top() {
+        let mut t = Terminal::new(6, 10);
+        t.feed(b"r0\r\nr1\r\nr2\r\nr3\r\nr4\r\nr5");
+        t.feed(b"\x1b[2;4r"); // margins 0-based 1..3
+        t.feed(b"\x1b[2;1H"); // top margin row 1 col 0
+        t.feed(b"\x1bM"); // RI at top margin -> scroll region down
+        // Top margin now blank, contents pushed down within region.
+        assert_eq!(row_str(&t, 0), "r0"); // outside untouched
+        assert_eq!(row_str(&t, 1), ""); // new blank at top margin
+        assert_eq!(row_str(&t, 2), "r1");
+        assert_eq!(row_str(&t, 3), "r2");
+        assert_eq!(row_str(&t, 4), "r4"); // outside untouched (r3 fell off region)
+    }
+
+    #[test]
+    fn ind_and_nel() {
+        let mut t = Terminal::new(5, 10);
+        t.feed(b"\x1b[2;5Hx"); // row 1, col 4 -> 'x', cursor col 5
+        t.feed(b"\x1bD"); // IND: down one, keep column
+        assert_eq!(t.cursor().row, 2);
+        assert_eq!(t.cursor().col, 5);
+        t.feed(b"\x1bE"); // NEL: down one + col 0
+        assert_eq!(t.cursor().row, 3);
+        assert_eq!(t.cursor().col, 0);
+    }
+
+    #[test]
+    fn il_dl_within_region() {
+        let mut t = Terminal::new(5, 10);
+        t.feed(b"a\r\nb\r\nc\r\nd\r\ne");
+        // Insert a line at row 1 (1-based row 2).
+        t.feed(b"\x1b[2;1H"); // row 1
+        t.feed(b"\x1b[L"); // IL 1
+        assert_eq!(row_str(&t, 0), "a");
+        assert_eq!(row_str(&t, 1), ""); // inserted blank
+        assert_eq!(row_str(&t, 2), "b");
+        assert_eq!(row_str(&t, 3), "c");
+        assert_eq!(row_str(&t, 4), "d"); // 'e' pushed off bottom
+
+        // Now delete the blank line we inserted.
+        t.feed(b"\x1b[2;1H");
+        t.feed(b"\x1b[M"); // DL 1
+        assert_eq!(row_str(&t, 0), "a");
+        assert_eq!(row_str(&t, 1), "b");
+        assert_eq!(row_str(&t, 2), "c");
+        assert_eq!(row_str(&t, 3), "d");
+    }
+
+    #[test]
+    fn ich_dch_ech() {
+        // ICH: insert blanks shifting right.
+        let mut t = Terminal::new(2, 10);
+        t.feed(b"abcdef");
+        t.feed(b"\x1b[1;3H"); // col 2 ('c')
+        t.feed(b"\x1b[2@"); // insert 2 blanks
+        assert_eq!(row_str(&t, 0), "ab  cdef");
+
+        // DCH: delete chars shifting left.
+        let mut t = Terminal::new(2, 10);
+        t.feed(b"abcdef");
+        t.feed(b"\x1b[1;3H"); // col 2 ('c')
+        t.feed(b"\x1b[2P"); // delete 2 chars
+        assert_eq!(row_str(&t, 0), "abef");
+
+        // ECH: erase in place.
+        let mut t = Terminal::new(2, 10);
+        t.feed(b"abcdef");
+        t.feed(b"\x1b[1;3H"); // col 2 ('c')
+        t.feed(b"\x1b[2X"); // erase 2 chars
+        assert_eq!(t.cell(0, 0).c, 'a');
+        assert_eq!(t.cell(0, 1).c, 'b');
+        assert_eq!(t.cell(0, 2).c, ' ');
+        assert_eq!(t.cell(0, 3).c, ' ');
+        assert_eq!(t.cell(0, 4).c, 'e');
+    }
+
+    #[test]
+    fn deferred_wrap_no_premature_blank_line() {
+        let mut t = Terminal::new(3, 5);
+        t.feed(b"abcde"); // exactly fills row 0; cursor pending at end of row 0
+        // The 5 chars are on row 0, nothing wrapped yet.
+        assert_eq!(row_str(&t, 0), "abcde");
+        assert_eq!(row_str(&t, 1), "");
+        assert_eq!(t.cursor().row, 0); // still on row 0 (pending wrap)
+        // One more char wraps to row 1 col 0.
+        t.feed(b"f");
+        assert_eq!(t.cell(1, 0).c, 'f');
+        assert_eq!(t.cursor().row, 1);
+        assert_eq!(t.cursor().col, 1);
+    }
+
+    #[test]
+    fn autowrap_disabled_overwrites_in_place() {
+        let mut t = Terminal::new(3, 5);
+        t.feed(b"\x1b[?7l"); // disable autowrap
+        t.feed(b"abcdeXYZ"); // last col keeps overwriting
+        assert_eq!(row_str(&t, 0), "abcdZ"); // 'Z' is the last written
+        assert_eq!(row_str(&t, 1), ""); // never wrapped
+    }
+
+    #[test]
+    fn sgr_reset_attributes() {
+        let mut t = Terminal::new(2, 20);
+        // Set all, then clear each.
+        t.feed(b"\x1b[1;3;4;7mA"); // bold italic underline inverse
+        let a = *t.cell(0, 0);
+        assert!(a.flags.bold && a.flags.italic && a.flags.underline && a.flags.inverse);
+        t.feed(b"\x1b[22mB"); // clear bold/faint
+        assert!(!t.cell(0, 1).flags.bold);
+        assert!(t.cell(0, 1).flags.italic); // others remain
+        t.feed(b"\x1b[23mC"); // clear italic
+        assert!(!t.cell(0, 2).flags.italic);
+        t.feed(b"\x1b[24mD"); // clear underline
+        assert!(!t.cell(0, 3).flags.underline);
+        t.feed(b"\x1b[27mE"); // clear inverse
+        assert!(!t.cell(0, 4).flags.inverse);
+        // faint (2) does not error and 0 resets all.
+        t.feed(b"\x1b[1;2;4m\x1b[0mF");
+        let f = *t.cell(0, 5);
+        assert!(!f.flags.bold && !f.flags.underline && !f.flags.italic && !f.flags.inverse);
     }
 }
