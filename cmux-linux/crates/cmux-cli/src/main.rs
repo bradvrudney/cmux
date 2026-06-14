@@ -30,6 +30,8 @@ COMMANDS:
     close-pane <ID>                   Close a pane
     notify <pane> <title> <body>      Raise an attention notification
     snapshot <pane>                   Print a pane's screen as text
+    notifications                     List the notification feed
+    mark-read                         Mark all notifications read
     config get [path]                 Read config (whole tree or dotted path)
     config set <path> <value>         Set a config value
 
@@ -111,6 +113,8 @@ fn parse(args: &[String]) -> Result<Option<Request>, String> {
     let req = match cmd {
         "ping" => Request::Ping,
         "list-workspaces" | "ls" => Request::ListWorkspaces,
+        "notifications" | "notes" => Request::ListNotifications,
+        "mark-read" => Request::MarkAllRead,
         "send" => {
             let (pane, positional) = take_pane_flag(rest);
             let data = positional.join(" ");
@@ -264,6 +268,15 @@ fn print_response(resp: &Response) {
         }
         Response::Error { message } => eprintln!("error: {message}"),
         Response::Workspaces { workspaces } => print_tree(workspaces),
+        Response::Notifications { notifications } => {
+            if notifications.is_empty() {
+                println!("(no notifications)");
+            }
+            for n in notifications {
+                let mark = if n.read { " " } else { "•" };
+                println!("{mark} {} {} — {}", n.pane, n.title, n.body);
+            }
+        }
     }
 }
 
@@ -415,6 +428,18 @@ mod tests {
         let (sock, rest) = extract_socket(argv(&["--socket", "/tmp/x.sock", "ping"]));
         assert_eq!(sock, Some(PathBuf::from("/tmp/x.sock")));
         assert_eq!(rest, argv(&["ping"]));
+    }
+
+    #[test]
+    fn notifications_and_mark_read() {
+        assert_eq!(
+            parse(&argv(&["notifications"])).unwrap(),
+            Some(Request::ListNotifications)
+        );
+        assert_eq!(
+            parse(&argv(&["mark-read"])).unwrap(),
+            Some(Request::MarkAllRead)
+        );
     }
 
     #[test]

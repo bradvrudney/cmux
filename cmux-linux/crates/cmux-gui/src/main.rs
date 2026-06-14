@@ -107,11 +107,20 @@ struct WorkspaceView {
     active: bool,
 }
 
+#[derive(Clone, PartialEq)]
+struct NotifView {
+    pane: PaneId,
+    title: String,
+    body: String,
+    read: bool,
+}
+
 #[derive(Clone, PartialEq, Default)]
 struct Snapshot {
     workspaces: Vec<WorkspaceView>,
     tabs: Vec<TabView>,
     panes: Vec<PaneView>,
+    notifications: Vec<NotifView>,
     unread: usize,
     sidebar_width: f32,
     sidebar_left: bool,
@@ -165,10 +174,23 @@ fn snapshot() -> Snapshot {
         })
         .collect();
 
+    let notifications = e
+        .notifications()
+        .iter()
+        .rev()
+        .map(|n| NotifView {
+            pane: n.pane,
+            title: n.title.clone(),
+            body: n.body.clone(),
+            read: n.read,
+        })
+        .collect();
+
     Snapshot {
         workspaces,
         tabs,
         panes,
+        notifications,
         unread: e.state.notifications.unread_count(),
         sidebar_width: e.config.sidebar.width,
         sidebar_left: e.config.sidebar.position == SidebarPosition::Left,
@@ -181,6 +203,7 @@ fn snapshot() -> Snapshot {
 #[component]
 fn App() -> Element {
     let mut tick = use_signal(|| 0u64);
+    let mut show_notifications = use_signal(|| false);
 
     // Drive PTY output ingestion + repaint at ~30fps.
     use_future(move || async move {
@@ -199,7 +222,7 @@ fn App() -> Element {
     let _ = tick();
     let snap = snapshot();
 
-    let sidebar = rsx! { Sidebar { snap: snap.clone(), tick } };
+    let sidebar = rsx! { Sidebar { snap: snap.clone(), tick, show_notifications } };
     let main = rsx! { PaneArea { snap: snap.clone(), tick } };
 
     rsx! {
@@ -220,14 +243,21 @@ fn App() -> Element {
                             .map(|a| a.to_string())
                     };
                     if let Some(action) = action {
-                        let mut g = e.lock().unwrap();
-                        // Model actions go through the engine; UI-only actions
-                        // (palette/settings/notifications) toggle local view state.
-                        let handled = g.dispatch_action(&action) || matches!(
-                            action.as_str(),
-                            "commandPalette" | "openSettings" | "toggleNotifications"
-                        );
-                        drop(g);
+                        // UI-only actions toggle local view state; everything
+                        // else goes through the shared engine action path.
+                        let handled = match action.as_str() {
+                            "toggleNotifications" => {
+                                let v = !show_notifications();
+                                show_notifications.set(v);
+                                true
+                            }
+                            "jumpToLatestNotification" => {
+                                let h = e.lock().unwrap().dispatch_action(&action);
+                                show_notifications.set(false);
+                                h
+                            }
+                            _ => e.lock().unwrap().dispatch_action(&action),
+                        };
                         if handled {
                             evt.prevent_default();
                             tick += 1;
@@ -250,21 +280,77 @@ fn App() -> Element {
                 {main}
                 {sidebar}
             }
+            if show_notifications() {
+                NotificationPanel { snap: snap.clone(), tick, show_notifications }
+            }
         }
     }
 }
 
 #[component]
-fn Sidebar(snap: Snapshot, tick: Signal<u64>) -> Element {
+fn NotificationPanel(
+    snap: Snapshot,
+    tick: Signal<u64>,
+    show_notifications: Signal<bool>,
+) -> Element {
+    rsx! {
+        div {
+            class: "notif-backdrop",
+            onclick: move |_| show_notifications.set(false),
+            div {
+                class: "notif-panel",
+                onclick: move |evt| evt.stop_propagation(),
+                div { class: "notif-head",
+                    span { "Notifications" }
+                    button {
+                        class: "notif-clear",
+                        onclick: move |_| {
+                            engine().lock().unwrap().mark_all_read();
+                            tick += 1;
+                        },
+                        "Mark all read"
+                    }
+                }
+                if snap.notifications.is_empty() {
+                    div { class: "notif-empty", "No notifications" }
+                }
+                for (i, n) in snap.notifications.iter().cloned().enumerate() {
+                    div {
+                        key: "{i}",
+                        class: if n.read { "notif-item read" } else { "notif-item" },
+                        onclick: move |_| {
+                            engine().lock().unwrap().state.focus_pane(n.pane);
+                            show_notifications.set(false);
+                            tick += 1;
+                        },
+                        div { class: "notif-title", "{n.title}" }
+                        div { class: "notif-body", "{n.body}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn Sidebar(snap: Snapshot, tick: Signal<u64>, show_notifications: Signal<bool>) -> Element {
     let width = snap.sidebar_width;
+    let mut show_notifications = show_notifications;
     rsx! {
         div {
             class: "sidebar",
             style: "width:{width}px;",
             div { class: "sidebar-header",
                 span { class: "logo", "cmux" }
-                if snap.unread > 0 {
-                    span { class: "unread", "{snap.unread}" }
+                button {
+                    class: if snap.unread > 0 { "unread" } else { "unread zero" },
+                    title: "Notifications",
+                    onclick: move |_| {
+                        let v = !show_notifications();
+                        show_notifications.set(v);
+                        tick += 1;
+                    },
+                    if snap.unread > 0 { "{snap.unread}" } else { "🔔" }
                 }
             }
             div { class: "workspaces",
@@ -453,4 +539,32 @@ html, body, #main, .app { height: 100%; margin: 0; }
     overflow: hidden;
 }
 .row { white-space: pre; }
+.unread { cursor: pointer; border: none; }
+.unread.zero { background: transparent; color: #6c7086; padding: 0; font-size: 14px; }
+.notif-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+    display: flex; justify-content: flex-end; z-index: 50;
+}
+.notif-panel {
+    width: 360px; height: 100%; background: #1e1e2e;
+    border-left: 1px solid #313244; display: flex; flex-direction: column;
+    box-shadow: -8px 0 24px rgba(0,0,0,0.4);
+}
+.notif-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 14px; border-bottom: 1px solid #313244; font-weight: 600;
+}
+.notif-clear {
+    background: #313244; color: #bac2de; border: none; border-radius: 6px;
+    padding: 4px 8px; font-size: 12px; cursor: pointer;
+}
+.notif-empty { padding: 24px; color: #6c7086; text-align: center; }
+.notif-item {
+    padding: 10px 14px; border-bottom: 1px solid #26263a; cursor: pointer;
+    border-left: 3px solid #4c71f2;
+}
+.notif-item:hover { background: #26263a; }
+.notif-item.read { border-left-color: transparent; opacity: 0.7; }
+.notif-title { font-size: 13px; font-weight: 600; }
+.notif-body { font-size: 12px; color: #a6adc8; }
 "#;

@@ -389,6 +389,13 @@ impl Engine {
                 Ok(()) => Response::Ok,
                 Err(e) => Response::error(e.to_string()),
             },
+            Request::ListNotifications => Response::Notifications {
+                notifications: self.notifications().to_vec(),
+            },
+            Request::MarkAllRead => {
+                self.mark_all_read();
+                Response::Ok
+            }
         }
     }
 
@@ -404,6 +411,14 @@ impl Engine {
 
     pub fn pane_ring(&self, pane: PaneId) -> RingState {
         self.state.pane(pane).map(|p| p.ring).unwrap_or_default()
+    }
+
+    pub fn notifications(&self) -> &[cmux_core::Notification] {
+        self.state.notifications.entries()
+    }
+
+    pub fn mark_all_read(&mut self) -> usize {
+        self.state.notifications.mark_all_read()
     }
 }
 

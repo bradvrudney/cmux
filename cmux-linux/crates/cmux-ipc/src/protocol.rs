@@ -82,6 +82,10 @@ pub enum Request {
     GetConfig { path: Option<String> },
     /// Set a config value by dotted path.
     SetConfig { path: String, value: String },
+    /// List the notification feed (newest last).
+    ListNotifications,
+    /// Mark every notification as read (clears the unread badge).
+    MarkAllRead,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -117,6 +121,9 @@ pub enum Response {
     Pong,
     Workspaces { workspaces: Vec<WorkspaceSummary> },
     Snapshot { text: String },
+    Notifications {
+        notifications: Vec<cmux_core::notification::Notification>,
+    },
     ConfigValue { value: serde_json::Value },
     /// Returned when an operation succeeded and produced a new id.
     Created { id: u64 },
