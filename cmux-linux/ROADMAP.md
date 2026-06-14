@@ -67,11 +67,14 @@ construction, not feature parity with the macOS app.
 - [x] **Background opacity** — the window is transparent and surfaces are tinted
       with the opacity setting via `color-mix` (no alpha compounding); the
       desktop shows through at <1.0. Pending visual verification on a compositor.
+- [x] **Terminal scrollback** — lines scrolling off the primary screen are kept
+      (10k-line cap; alt screen excluded); the mouse wheel scrolls a pane
+      through history, and new output snaps back to the live screen.
 
 ## Planned
 
 - [ ] Scriptable browser API (upstream's agent-browser port) on the browser pane.
-- [ ] Terminal scrollback + find.
+- [ ] In-terminal find (search the scrollback).
 
 ## Out of scope (no Linux equivalent / deliberately dropped for v1)
 

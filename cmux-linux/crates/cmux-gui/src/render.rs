@@ -4,7 +4,7 @@
 //! cells that share styling. Keeping the run-coalescing here (rather than one
 //! span per cell) keeps the DOM small enough to re-render at interactive rates.
 
-use cmux_term::{Cell, Color, Terminal};
+use cmux_term::{Cell, Color};
 
 /// Default foreground/background are emitted as CSS variables so the active
 /// theme (set on the app root) controls them; the fallbacks match the dark icon.
@@ -18,11 +18,10 @@ pub struct StyledRun {
     pub text: String,
 }
 
-/// Coalesce each terminal row into styled runs.
-pub fn rows_to_runs(term: &Terminal) -> Vec<Vec<StyledRun>> {
-    (0..term.rows())
-        .map(|r| row_to_runs(term.row(r)))
-        .collect()
+/// Coalesce a set of rows (a terminal viewport, possibly scrolled back) into
+/// styled runs for the webview.
+pub fn viewport_to_runs(rows: &[Vec<Cell>]) -> Vec<Vec<StyledRun>> {
+    rows.iter().map(|r| row_to_runs(r)).collect()
 }
 
 fn row_to_runs(row: &[Cell]) -> Vec<StyledRun> {
@@ -130,6 +129,7 @@ pub fn xterm256(i: u8) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cmux_term::Terminal;
 
     #[test]
     fn palette_cube_and_grayscale() {
@@ -155,7 +155,7 @@ mod tests {
     fn runs_coalesce_same_style() {
         let mut term = Terminal::new(1, 10);
         term.feed(b"hello");
-        let runs = rows_to_runs(&term);
+        let runs = viewport_to_runs(&term.viewport(0));
         assert_eq!(runs.len(), 1);
         // "hello" + trailing blanks: all default style, so it should coalesce
         // into a single run beginning with "hello".
@@ -166,7 +166,7 @@ mod tests {
     fn color_change_splits_runs() {
         let mut term = Terminal::new(1, 10);
         term.feed(b"a\x1b[31mb");
-        let runs = rows_to_runs(&term);
+        let runs = viewport_to_runs(&term.viewport(0));
         // 'a' default, then red 'b' (then blanks) — at least two runs.
         assert!(runs[0].len() >= 2);
         assert!(runs[0][0].text.starts_with('a'));

@@ -5,6 +5,8 @@
 //! into styled HTML spans; tests and the control socket can use
 //! [`Terminal::render_to_string`] for a plain-text snapshot.
 
+use std::collections::VecDeque;
+
 use serde::{Deserialize, Serialize};
 use unicode_width::UnicodeWidthChar;
 use vte::{Params, Parser, Perform};
@@ -277,6 +279,8 @@ struct TermState {
     title: Option<String>,
     /// Notifications raised via OSC 9 / OSC 777 (drained by the host).
     notifications: Vec<(String, String)>,
+    /// Lines that scrolled off the top of the primary screen, oldest first.
+    scrollback: VecDeque<Vec<Cell>>,
 }
 
 impl Terminal {
@@ -300,6 +304,7 @@ impl Terminal {
                 saved_alt_cursor: SavedCursor::default(),
                 title: None,
                 notifications: Vec::new(),
+                scrollback: VecDeque::new(),
             },
         }
     }
@@ -391,6 +396,43 @@ impl Terminal {
         std::mem::take(&mut self.state.notifications)
     }
 
+    /// Number of lines preserved in scrollback (history above the screen).
+    pub fn scrollback_len(&self) -> usize {
+        self.state.scrollback.len()
+    }
+
+    /// The visible viewport scrolled back by `offset` lines (0 = live screen).
+    /// Returns exactly `rows()` rows of cells, drawing from scrollback for the
+    /// portion above the current screen. `offset` is clamped to scrollback len.
+    pub fn viewport(&self, offset: usize) -> Vec<Vec<Cell>> {
+        let rows = self.state.screen.rows();
+        let cols = self.state.screen.cols();
+        let offset = offset.min(self.state.scrollback.len());
+        if offset == 0 {
+            return (0..rows).map(|r| self.state.screen.row(r).to_vec()).collect();
+        }
+        // Build a combined view: [scrollback ... | screen ...], then take the
+        // window ending `offset` lines from the bottom.
+        let sb = &self.state.scrollback;
+        let total = sb.len() + rows;
+        let end = total - offset; // exclusive index of the window's bottom
+        let start = end.saturating_sub(rows);
+        let blank = vec![Cell::default(); cols];
+        (start..end)
+            .map(|i| {
+                if i < sb.len() {
+                    let mut line = sb[i].clone();
+                    line.resize(cols, Cell::default());
+                    line
+                } else {
+                    self.state.screen.row(i - sb.len()).to_vec()
+                }
+            })
+            .chain(std::iter::repeat(blank.clone()))
+            .take(rows)
+            .collect()
+    }
+
     /// Render the whole screen to a plain `String`: one `\n` per row, with
     /// trailing spaces trimmed from each line.
     pub fn render_to_string(&self) -> String {
@@ -425,11 +467,25 @@ impl TermState {
     fn line_feed(&mut self) {
         let top = self.scroll_top;
         let bottom = self.scroll_bottom;
-        let s = &mut self.screen;
-        if s.cursor.row == bottom {
-            s.scroll_region_up(top, bottom, 1);
-        } else if s.cursor.row + 1 < s.rows {
-            s.cursor.row += 1;
+        if self.screen.cursor.row == bottom {
+            // A line scrolling off the top of the primary screen (full-height
+            // region) is preserved in scrollback for history.
+            if !self.alt_active && top == 0 {
+                let line: Vec<Cell> =
+                    (0..self.screen.cols).map(|c| *self.screen.cell(0, c)).collect();
+                self.push_scrollback(line);
+            }
+            self.screen.scroll_region_up(top, bottom, 1);
+        } else if self.screen.cursor.row + 1 < self.screen.rows {
+            self.screen.cursor.row += 1;
+        }
+    }
+
+    fn push_scrollback(&mut self, line: Vec<Cell>) {
+        const MAX_SCROLLBACK: usize = 10_000;
+        self.scrollback.push_back(line);
+        while self.scrollback.len() > MAX_SCROLLBACK {
+            self.scrollback.pop_front();
         }
     }
 
@@ -1032,6 +1088,32 @@ mod tests {
         let mut t = Terminal::new(24, 80);
         t.feed(b"\x1b[3;5HZ");
         assert_eq!(t.cell(2, 4).c, 'Z');
+    }
+
+    #[test]
+    fn scrollback_accumulates_and_viewport_scrolls_back() {
+        let mut t = Terminal::new(2, 6);
+        // On a 2-row grid, L0 and L1 scroll into history as L2/L3 arrive.
+        t.feed(b"L0\r\nL1\r\nL2\r\nL3");
+        assert_eq!(t.scrollback_len(), 2);
+
+        let live = t.viewport(0);
+        assert_eq!(live.len(), 2);
+        let live_top: String = live[0].iter().map(|c| c.c).collect();
+        assert!(live_top.trim_end().starts_with("L2"));
+
+        // Scroll all the way back: the oldest line (L0) is at the top.
+        let back = t.viewport(t.scrollback_len());
+        let back_top: String = back[0].iter().map(|c| c.c).collect();
+        assert!(back_top.trim_end().starts_with("L0"));
+    }
+
+    #[test]
+    fn alt_screen_does_not_grow_scrollback() {
+        let mut t = Terminal::new(2, 6);
+        t.feed(b"\x1b[?1049h"); // enter alt screen
+        t.feed(b"A\r\nB\r\nC\r\nD");
+        assert_eq!(t.scrollback_len(), 0);
     }
 
     #[test]

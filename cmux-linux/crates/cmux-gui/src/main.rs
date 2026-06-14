@@ -195,8 +195,8 @@ fn snapshot() -> Snapshot {
             ring: e.pane_ring(id),
             alive: e.pane_alive(id),
             rows: e
-                .terminal(id)
-                .map(render::rows_to_runs)
+                .terminal_viewport(id)
+                .map(|v| render::viewport_to_runs(&v))
                 .unwrap_or_default(),
             browser_url: e.state.pane(id).and_then(|p| p.browser_url().map(String::from)),
         })
@@ -790,6 +790,13 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                                                 e.lock().unwrap().resize_pane(pid, rows, cols);
                                             }
                                         }
+                                    },
+                                    onwheel: move |evt| {
+                                        // Wheel up scrolls into history; down toward the live screen.
+                                        let dy = evt.data().delta().strip_units().y;
+                                        let lines = if dy < 0.0 { 3 } else { -3 };
+                                        engine().lock().unwrap().scroll_pane(pid, lines);
+                                        tick += 1;
                                     },
                                     for (ri, runs) in p.rows.iter().enumerate() {
                                         div { key: "{ri}", class: "row",

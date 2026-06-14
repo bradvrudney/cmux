@@ -31,6 +31,8 @@ struct PaneRuntime {
     term: Terminal,
     rx: Receiver<PtyEvent>,
     exited: bool,
+    /// Lines scrolled back into history (0 = pinned to the live screen).
+    scroll_offset: usize,
 }
 
 impl PaneRuntime {
@@ -157,6 +159,7 @@ impl Engine {
             term: Terminal::new(DEFAULT_ROWS as usize, DEFAULT_COLS as usize),
             rx,
             exited: false,
+            scroll_offset: 0,
         })
     }
 
@@ -178,6 +181,8 @@ impl Engine {
                         PtyEvent::Output(bytes) => {
                             total += bytes.len();
                             rt.term.feed(&bytes);
+                            // New output pins the view back to the live screen.
+                            rt.scroll_offset = 0;
                         }
                         PtyEvent::Exited(_) => rt.exited = true,
                     }
@@ -225,6 +230,27 @@ impl Engine {
 
     pub fn terminal(&self, pane: PaneId) -> Option<&Terminal> {
         self.runtimes.get(&pane).map(|r| &r.term)
+    }
+
+    /// The visible rows for a pane, accounting for its scrollback offset.
+    pub fn terminal_viewport(&self, pane: PaneId) -> Option<Vec<Vec<cmux_term::Cell>>> {
+        self.runtimes
+            .get(&pane)
+            .map(|r| r.term.viewport(r.scroll_offset))
+    }
+
+    /// Scroll a pane through its history. Positive `delta` scrolls up (older);
+    /// the offset is clamped to the available scrollback.
+    pub fn scroll_pane(&mut self, pane: PaneId, delta: i32) -> bool {
+        match self.runtimes.get_mut(&pane) {
+            Some(rt) => {
+                let max = rt.term.scrollback_len() as i32;
+                let next = (rt.scroll_offset as i32 + delta).clamp(0, max);
+                rt.scroll_offset = next as usize;
+                true
+            }
+            None => false,
+        }
     }
 
     pub fn pane_alive(&self, pane: PaneId) -> bool {
@@ -772,6 +798,18 @@ mod tests {
             }
         }
         assert!(titled, "OSC title did not update the pane title");
+    }
+
+    #[test]
+    fn scroll_offset_clamps_to_scrollback() {
+        let mut e = engine();
+        let p = e.state.focused_pane().unwrap();
+        // No scrollback yet → scrolling up is clamped to 0.
+        assert!(e.scroll_pane(p, 5));
+        let v = e.terminal_viewport(p).unwrap();
+        assert_eq!(v.len(), 24); // default rows
+        // Scrolling down past 0 stays at 0.
+        assert!(e.scroll_pane(p, -10));
     }
 
     #[test]
