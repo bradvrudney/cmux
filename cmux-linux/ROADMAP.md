@@ -43,6 +43,12 @@ construction, not feature parity with the macOS app.
 - [x] **Live theming** — light/dark palettes via CSS variables (Catppuccin
       Mocha/Latte), including terminal default colors; switches instantly from
       Settings.
+- [x] **OSC capture** — pane output drives the UI: OSC 0/1/2 sets the pane title
+      (tab/pane labels follow the running program), OSC 9 and OSC 777 raise
+      notifications. This is how coding agents signal cmux directly, beyond the
+      terminal bell.
+- [x] **Resize tracking** — panes re-measure on window/divider resize, not just
+      on mount.
 
 ## In progress
 
@@ -51,11 +57,10 @@ construction, not feature parity with the macOS app.
 
 ## Planned
 
-- [ ] Re-measure panes on window/divider resize (currently measured on mount).
-- [ ] Pane drag-to-reorder and divider drag-to-resize.
-- [ ] Session persistence / restore across restarts.
-- [ ] Agent hooks parity (notification triggers from coding-agent lifecycle).
-- [ ] Theme/font live config application.
+- [ ] Pane drag-to-reorder and divider drag-to-resize (mouse-driven; the engine
+      ops `reorder_tab`/`set_ratio_for` exist and are scriptable via the CLI).
+- [ ] Wide-character (CJK/emoji) double-width cells in the emulator.
+- [ ] In-app browser pane (needs nested webview wiring).
 
 ## Out of scope (no Linux equivalent / deliberately dropped for v1)
 

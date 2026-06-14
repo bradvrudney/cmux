@@ -272,6 +272,10 @@ struct TermState {
     saved_primary: Option<Screen>,
     /// Saved cursor/pen for the `?1049` alt-screen enter (restored on leave).
     saved_alt_cursor: SavedCursor,
+    /// Latest window title from OSC 0/1/2 (drained by the host).
+    title: Option<String>,
+    /// Notifications raised via OSC 9 / OSC 777 (drained by the host).
+    notifications: Vec<(String, String)>,
 }
 
 impl Terminal {
@@ -293,6 +297,8 @@ impl Terminal {
                 alt_active: false,
                 saved_primary: None,
                 saved_alt_cursor: SavedCursor::default(),
+                title: None,
+                notifications: Vec::new(),
             },
         }
     }
@@ -367,6 +373,21 @@ impl Terminal {
         let rang = self.state.bell;
         self.state.bell = false;
         rang
+    }
+
+    /// The current window title (OSC 0/1/2), if one has been set.
+    pub fn title(&self) -> Option<&str> {
+        self.state.title.as_deref()
+    }
+
+    /// Take and clear the latest title set since the last call.
+    pub fn take_title(&mut self) -> Option<String> {
+        self.state.title.take()
+    }
+
+    /// Take and clear notifications raised via OSC 9 / OSC 777 (title, body).
+    pub fn take_notifications(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.state.notifications)
     }
 
     /// Render the whole screen to a plain `String`: one `\n` per row, with
@@ -777,6 +798,43 @@ impl Perform for TermState {
         }
     }
 
+    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+        let code = params.first().and_then(|c| std::str::from_utf8(c).ok());
+        match code {
+            // Window/icon title.
+            Some("0") | Some("1") | Some("2") => {
+                if let Some(t) = params.get(1) {
+                    self.title = Some(String::from_utf8_lossy(t).into_owned());
+                }
+            }
+            // OSC 9 ; <body> — simple desktop notification (iTerm2 convention).
+            Some("9") => {
+                if let Some(body) = params.get(1) {
+                    let body = String::from_utf8_lossy(body).into_owned();
+                    if !body.is_empty() {
+                        self.notifications.push(("Notification".to_string(), body));
+                    }
+                }
+            }
+            // OSC 777 ; notify ; <title> ; <body> (urxvt/extension convention).
+            Some("777") => {
+                let sub = params.get(1).and_then(|c| std::str::from_utf8(c).ok());
+                if sub == Some("notify") {
+                    let title = params
+                        .get(2)
+                        .map(|b| String::from_utf8_lossy(b).into_owned())
+                        .unwrap_or_default();
+                    let body = params
+                        .get(3)
+                        .map(|b| String::from_utf8_lossy(b).into_owned())
+                        .unwrap_or_default();
+                    self.notifications.push((title, body));
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8) {
         match byte {
             b'7' => self.save_cursor(),    // DECSC
@@ -945,6 +1003,33 @@ mod tests {
         let mut t = Terminal::new(24, 80);
         t.feed(b"\x1b[3;5HZ");
         assert_eq!(t.cell(2, 4).c, 'Z');
+    }
+
+    #[test]
+    fn osc_sets_window_title() {
+        let mut t = Terminal::new(3, 10);
+        t.feed(b"\x1b]0;my-shell\x07");
+        assert_eq!(t.title(), Some("my-shell"));
+        assert_eq!(t.take_title().as_deref(), Some("my-shell"));
+        assert_eq!(t.title(), None);
+    }
+
+    #[test]
+    fn osc_9_raises_notification() {
+        let mut t = Terminal::new(3, 10);
+        t.feed(b"\x1b]9;build finished\x07");
+        let n = t.take_notifications();
+        assert_eq!(n.len(), 1);
+        assert_eq!(n[0], ("Notification".to_string(), "build finished".to_string()));
+        assert!(t.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn osc_777_notify_title_and_body() {
+        let mut t = Terminal::new(3, 10);
+        t.feed(b"\x1b]777;notify;Claude;needs input\x07");
+        let n = t.take_notifications();
+        assert_eq!(n, vec![("Claude".to_string(), "needs input".to_string())]);
     }
 
     #[test]

@@ -163,6 +163,10 @@ impl Engine {
         let mut total = 0;
         let panes: Vec<PaneId> = self.runtimes.keys().copied().collect();
         let mut bells: Vec<PaneId> = Vec::new();
+        // (pane, title, body) notifications raised via OSC 9 / OSC 777.
+        let mut osc_notifs: Vec<(PaneId, String, String)> = Vec::new();
+        // (pane, new title) from OSC 0/1/2.
+        let mut titles: Vec<(PaneId, String)> = Vec::new();
         for pane in panes {
             if let Some(rt) = self.runtimes.get_mut(&pane) {
                 while let Ok(evt) = rt.rx.try_recv() {
@@ -177,12 +181,32 @@ impl Engine {
                 if rt.term.take_bell() {
                     bells.push(pane);
                 }
+                if let Some(title) = rt.term.take_title() {
+                    titles.push((pane, title));
+                }
+                for (t, b) in rt.term.take_notifications() {
+                    osc_notifs.push((pane, t, b));
+                }
             }
         }
-        if self.config.notifications.enabled && self.config.notifications.ring_on_bell {
-            let now = Self::now_ms();
-            for pane in bells {
-                self.state.notify(pane, "Bell", "terminal bell", now);
+        // Apply OSC window titles to pane titles (drives tab/pane labels).
+        for (pane, title) in titles {
+            if let Some(p) = self.state.panes.get_mut(&pane) {
+                if !title.is_empty() {
+                    p.title = title;
+                }
+            }
+        }
+        let now = Self::now_ms();
+        if self.config.notifications.enabled {
+            // OSC-driven notifications are explicit app intent — always raise.
+            for (pane, title, body) in osc_notifs {
+                self.state.notify(pane, title, body, now);
+            }
+            if self.config.notifications.ring_on_bell {
+                for pane in bells {
+                    self.state.notify(pane, "Bell", "terminal bell", now);
+                }
             }
         }
         // Persist topology periodically so a crash/restart restores the layout.
@@ -660,6 +684,45 @@ mod tests {
         assert_eq!(e2.state.panes.len(), pane_count);
         let pane = e2.state.focused_pane().unwrap();
         assert!(e2.terminal(pane).is_some());
+    }
+
+    #[test]
+    fn osc_notification_from_pty_output() {
+        let mut e = engine();
+        let p = e.state.focused_pane().unwrap();
+        // The shell emits an OSC 777 notify sequence; the emulator parses it and
+        // pump() turns it into a feed entry.
+        e.write_pane(p, b"printf '\\033]777;notify;Claude;needs input\\007'\n");
+        let mut found = false;
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            e.pump();
+            if e.notifications()
+                .iter()
+                .any(|n| n.title == "Claude" && n.body == "needs input")
+            {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "OSC 777 notification was not captured");
+    }
+
+    #[test]
+    fn osc_title_sets_pane_title() {
+        let mut e = engine();
+        let p = e.state.focused_pane().unwrap();
+        e.write_pane(p, b"printf '\\033]0;my-task\\007'\n");
+        let mut titled = false;
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            e.pump();
+            if e.state.pane(p).map(|p| p.title.as_str()) == Some("my-task") {
+                titled = true;
+                break;
+            }
+        }
+        assert!(titled, "OSC title did not update the pane title");
     }
 
     #[test]
