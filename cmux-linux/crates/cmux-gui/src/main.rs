@@ -684,6 +684,18 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                                         }
                                     }
                                 },
+                                onresize: move |evt| {
+                                    // Track window/divider resizes so the PTY matches the view.
+                                    let char_w = (font as f64) * 0.6;
+                                    let line_h = (font as f64) * 1.3;
+                                    if let Ok(size) = evt.get_content_box_size() {
+                                        let cols = (size.width / char_w).floor().max(1.0) as u16;
+                                        let rows = (size.height / line_h).floor().max(1.0) as u16;
+                                        if let Some(e) = ENGINE.get() {
+                                            e.lock().unwrap().resize_pane(pid, rows, cols);
+                                        }
+                                    }
+                                },
                                 for (ri, runs) in p.rows.iter().enumerate() {
                                     div { key: "{ri}", class: "row",
                                         for (ci, run) in runs.iter().enumerate() {
