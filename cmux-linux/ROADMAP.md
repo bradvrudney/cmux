@@ -49,17 +49,19 @@ construction, not feature parity with the macOS app.
       terminal bell.
 - [x] **Resize tracking** — panes re-measure on window/divider resize, not just
       on mount.
+- [x] **Wide characters** — CJK/emoji occupy two cells (via `unicode-width`),
+      with correct cursor advance, edge wrapping, and snapshot text.
+- [x] **System theme follows the OS** — the `system` theme uses
+      `prefers-color-scheme` (honored by WebKitGTK), light or dark to match.
 
 ## In progress
 
 - [ ] Background opacity (persisted; needs window transparency to apply visually).
-- [ ] OS-appearance detection for the "system" theme (resolves to dark for now).
 
 ## Planned
 
 - [ ] Pane drag-to-reorder and divider drag-to-resize (mouse-driven; the engine
       ops `reorder_tab`/`set_ratio_for` exist and are scriptable via the CLI).
-- [ ] Wide-character (CJK/emoji) double-width cells in the emulator.
 - [ ] In-app browser pane (needs nested webview wiring).
 
 ## Out of scope (no Linux equivalent / deliberately dropped for v1)

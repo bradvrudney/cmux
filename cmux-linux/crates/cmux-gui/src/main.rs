@@ -201,8 +201,9 @@ fn snapshot() -> Snapshot {
         font_size: e.config.appearance.font_size,
         theme: match e.config.appearance.theme {
             cmux_config::Theme::Light => "light",
-            // "system" resolves to dark until OS-appearance detection lands.
-            _ => "dark",
+            cmux_config::Theme::Dark => "dark",
+            // "system" follows the OS via prefers-color-scheme (see BASE_CSS).
+            cmux_config::Theme::System => "system",
         },
         opacity: e.config.appearance.opacity.clamp(0.3, 1.0),
     }
@@ -743,6 +744,21 @@ html, body, #main, .app { height: 100%; margin: 0; }
     --border:#ccd0da; --border-strong:#bcc0cc; --text:#4c4f69; --text-dim:#5c5f77;
     --muted:#8c8fa1; --accent:#1e66f5; --on-accent:#ffffff;
     --term-fg:#4c4f69; --term-bg:#eff1f5; --overlay:rgba(60,60,80,0.35);
+}
+/* "system" theme: dark by default, light when the OS prefers light. */
+.app.theme-system {
+    --bg:#181825; --panel:#1e1e2e; --deep:#11111b; --panel2:#313244;
+    --border:#313244; --border-strong:#45475a; --text:#cdd6f4; --text-dim:#bac2de;
+    --muted:#6c7086; --accent:#4c71f2; --on-accent:#ffffff;
+    --term-fg:#cdd6f4; --term-bg:#1e1e2e; --overlay:rgba(0,0,0,0.4);
+}
+@media (prefers-color-scheme: light) {
+    .app.theme-system {
+        --bg:#eff1f5; --panel:#e6e9ef; --deep:#dce0e8; --panel2:#ccd0da;
+        --border:#ccd0da; --border-strong:#bcc0cc; --text:#4c4f69; --text-dim:#5c5f77;
+        --muted:#8c8fa1; --accent:#1e66f5; --on-accent:#ffffff;
+        --term-fg:#4c4f69; --term-bg:#eff1f5; --overlay:rgba(60,60,80,0.35);
+    }
 }
 .app {
     display: flex; flex-direction: row; height: 100vh; outline: none;

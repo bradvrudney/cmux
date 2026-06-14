@@ -6,6 +6,7 @@
 //! [`Terminal::render_to_string`] for a plain-text snapshot.
 
 use serde::{Deserialize, Serialize};
+use unicode_width::UnicodeWidthChar;
 use vte::{Params, Parser, Perform};
 
 /// A terminal color.
@@ -397,8 +398,17 @@ impl Terminal {
         let mut out = String::new();
         for r in 0..screen.rows() {
             let mut line = String::with_capacity(screen.cols());
-            for c in 0..screen.cols() {
-                line.push(screen.cell(r, c).c);
+            let mut c = 0;
+            while c < screen.cols() {
+                let ch = screen.cell(r, c).c;
+                line.push(ch);
+                // A double-width glyph owns the following spacer cell; skip it
+                // so the text isn't padded with a stray space.
+                if UnicodeWidthChar::width(ch) == Some(2) {
+                    c += 2;
+                } else {
+                    c += 1;
+                }
             }
             out.push_str(line.trim_end_matches(' '));
             if r + 1 < screen.rows() {
@@ -439,6 +449,12 @@ impl TermState {
     /// Write a character at the cursor and advance, with deferred (pending)
     /// autowrap at the end of a row.
     fn write_char(&mut self, c: char) {
+        // Combining / zero-width marks: skip rather than risk corrupting the
+        // grid (full combining support is a future item).
+        let width = UnicodeWidthChar::width(c).unwrap_or(0);
+        if width == 0 {
+            return;
+        }
         let (fg, bg, flags) = (self.pen.fg, self.pen.bg, self.pen.flags);
 
         // Resolve any deferred wrap from the previous print before writing.
@@ -451,6 +467,12 @@ impl TermState {
         }
 
         let cols = self.screen.cols;
+        // A double-width glyph that can't fit before the right edge wraps first.
+        if width == 2 && self.autowrap && self.screen.cursor.col + 1 >= cols {
+            self.screen.cursor.col = 0;
+            self.line_feed();
+        }
+
         // Without autowrap, printing in the last column overwrites in place.
         let col = self.screen.cursor.col.min(cols - 1);
         let row = self.screen.cursor.row;
@@ -461,17 +483,24 @@ impl TermState {
             cell.bg = bg;
             cell.flags = flags;
         }
+        // Clear the spacer cell a wide glyph occupies.
+        if width == 2 && col + 1 < cols {
+            let cell = self.screen.cell_mut(row, col + 1);
+            cell.c = ' ';
+            cell.fg = fg;
+            cell.bg = bg;
+            cell.flags = flags;
+        }
 
-        if col + 1 >= cols {
-            // At the last column: latch a pending wrap (autowrap) or stay put.
+        let new_col = col + width;
+        if new_col >= cols {
+            // Past the last column: latch a pending wrap (autowrap) or stay put.
+            self.screen.cursor.col = cols - 1;
             if self.autowrap {
-                self.screen.cursor.col = cols - 1;
                 self.pending_wrap = true;
-            } else {
-                self.screen.cursor.col = cols - 1;
             }
         } else {
-            self.screen.cursor.col = col + 1;
+            self.screen.cursor.col = new_col;
         }
     }
 
@@ -1003,6 +1032,31 @@ mod tests {
         let mut t = Terminal::new(24, 80);
         t.feed(b"\x1b[3;5HZ");
         assert_eq!(t.cell(2, 4).c, 'Z');
+    }
+
+    #[test]
+    fn wide_char_occupies_two_cells() {
+        let mut t = Terminal::new(2, 10);
+        t.feed("世界".as_bytes());
+        assert_eq!(t.cell(0, 0).c, '世');
+        assert_eq!(t.cell(0, 1).c, ' '); // spacer
+        assert_eq!(t.cell(0, 2).c, '界');
+        assert_eq!(t.cell(0, 3).c, ' '); // spacer
+        // Cursor advanced by 2 per wide glyph.
+        assert_eq!(t.cursor().col, 4);
+        // render_to_string doesn't pad wide glyphs with stray spaces.
+        assert!(t.render_to_string().starts_with("世界"));
+    }
+
+    #[test]
+    fn wide_char_wraps_when_it_cannot_fit() {
+        // 3-col grid: 'a' then a wide glyph can't fit in the remaining 2 cols
+        // after column 2, so it wraps to the next line.
+        let mut t = Terminal::new(2, 3);
+        t.feed(b"ab");
+        t.feed("世".as_bytes());
+        // 'a','b' on row 0; wide glyph wrapped to row 1 col 0.
+        assert_eq!(t.cell(1, 0).c, '世');
     }
 
     #[test]
