@@ -29,6 +29,8 @@ pub fn default_shortcuts() -> BTreeMap<String, String> {
         ("jumpToLatestNotification", "ctrl+shift+j"),
         ("reopenClosedTab", "ctrl+shift+z"),
         ("openSettings", "ctrl+comma"),
+        ("copySelection", "ctrl+shift+c"),
+        ("paste", "ctrl+shift+v"),
         ("equalizeSplits", "ctrl+shift+o"),
         ("toggleZoom", "ctrl+shift+m"),
         ("closeWorkspace", "ctrl+shift+q"),

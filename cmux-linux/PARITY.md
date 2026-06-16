@@ -44,8 +44,8 @@ tracked here but marked ⬜.
 | OSC 8 hyperlinks + ⌘/Ctrl-click to open | ❌ |
 | OSC 133 prompt marks (shell integration) | ❌ |
 | OSC 99 (kitty notifications) | ❌ |
-| Mouse text selection | ❌ |
-| Copy selection / paste to PTY | ❌ |
+| Mouse text selection (drag, multi-line) | ✅ |
+| Copy selection (`ctrl+shift+c`) / paste (`ctrl+shift+v`) | ✅ (system clipboard via arboard) |
 | Rich-text / image paste, paste bracketing | ⬜ / ❌ |
 | Vim-style copy mode | ❌ |
 | Mouse reporting to TUIs (SGR/X11) | ❌ |
@@ -252,8 +252,8 @@ cloud backend, or the web backend, and are intentionally not part of cmux-linux:
 ## Headline coverage (desktop-core, excluding ⬜)
 
 - **Terminal/rendering:** core emulation, scrollback, find, wide chars, OSC
-  title/notify, bell, theming, opacity, resize — ✅. Missing the big ones:
-  **mouse selection + copy/paste**, OSC 8 hyperlinks, IME, copy mode.
+  title/notify, bell, theming, opacity, resize, **mouse selection + clipboard
+  copy/paste** — ✅. Missing: OSC 8 hyperlinks, IME, copy mode.
 - **Layout/navigation:** workspaces, vertical tabs, splits, focus nav, divider
   drag, tab reorder + cycling, equalize, zoom, close/select workspace,
   reopen-tab, palette — ✅. Missing: move-to-workspace, workspace groups,
@@ -265,5 +265,7 @@ cloud backend, or the web backend, and are intentionally not part of cmux-linux:
   custom actions, shortcut UI editor.
 - **Browser/session:** basic browser pane + topology restore — ✅/🟡.
 
-The single most impactful gap for everyday terminal use is **text selection and
-clipboard copy/paste**, which the original has but cmux-linux does not yet.
+Text selection and clipboard copy/paste — previously the single biggest gap —
+are now implemented (drag to select, `ctrl+shift+c` / `ctrl+shift+v`). The
+remaining notable terminal gaps are OSC 8 hyperlinks, IME composition, and a
+vim-style copy mode.

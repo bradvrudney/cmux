@@ -80,7 +80,8 @@ cmux config get appearance.fontSize
 cmux config set appearance.theme dark
 ```
 
-Keyboard: `ctrl+shift+o` equalize, `ctrl+shift+m` zoom, `ctrl+shift+q` close
+Keyboard: drag to select terminal text, `ctrl+shift+c` / `ctrl+shift+v` to
+copy/paste, `ctrl+shift+o` equalize, `ctrl+shift+m` zoom, `ctrl+shift+q` close
 workspace, `ctrl+1`…`ctrl+9` select workspace 1–9, `ctrl+tab` /
 `ctrl+shift+tab` cycle tabs (all rebindable in `cmux.json`).
 

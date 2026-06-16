@@ -84,9 +84,13 @@ construction, not feature parity with the macOS app.
       `appearance.fontFamily` is now applied to the terminal grid. All routed
       through the shared `Engine` action path (keyboard + palette + CLI).
 
+- [x] **Terminal text selection + clipboard** — drag to select (single- and
+      multi-line, rendered with a selection tint), copy with `ctrl+shift+c` and
+      paste with `ctrl+shift+v` via the system clipboard (`arboard`, Wayland +
+      X11). Typing clears the selection, like a real terminal.
+
 ## Planned
 
-- [ ] Text selection + clipboard copy/paste in terminal panes (largest gap).
 - [ ] OS desktop notifications + sounds; OSC 8 hyperlinks with click-to-open.
 - [ ] Scriptable browser API (upstream's agent-browser port) on the browser pane.
 - [ ] Highlight find matches in-place (currently scrolls to the match line).

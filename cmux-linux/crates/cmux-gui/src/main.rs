@@ -197,7 +197,7 @@ fn snapshot() -> Snapshot {
             alive: e.pane_alive(id),
             rows: e
                 .terminal_viewport(id)
-                .map(|v| render::viewport_to_runs(&v))
+                .map(|v| render::viewport_to_runs_sel(&v, e.selection_for(id)))
                 .unwrap_or_default(),
             browser_url: e.state.pane(id).and_then(|p| p.browser_url().map(String::from)),
         })
@@ -245,6 +245,31 @@ fn snapshot() -> Snapshot {
         },
         opacity: e.config.appearance.opacity.clamp(0.3, 1.0),
     }
+}
+
+/// Map a mouse event over a terminal grid to a (row, col) cell. Mirrors the
+/// rendered metrics: 6px grid padding, line-height 1.2, ~0.6em monospace advance.
+fn cell_at(evt: &Event<MouseData>, font: f32) -> (usize, usize) {
+    let p = evt.data().element_coordinates();
+    let char_w = (font as f64) * 0.6;
+    let line_h = (font as f64) * 1.2;
+    let col = ((p.x - 6.0).max(0.0) / char_w).floor() as usize;
+    let row = ((p.y - 6.0).max(0.0) / line_h).floor() as usize;
+    (row, col)
+}
+
+/// Put text on the system clipboard (best-effort).
+fn set_clipboard(text: &str) {
+    if let Ok(mut cb) = arboard::Clipboard::new() {
+        let _ = cb.set_text(text.to_string());
+    }
+}
+
+/// Read text from the system clipboard, if any.
+fn get_clipboard() -> Option<String> {
+    arboard::Clipboard::new()
+        .ok()
+        .and_then(|mut cb| cb.get_text().ok())
 }
 
 // ---- components ------------------------------------------------------------
@@ -324,6 +349,19 @@ fn App() -> Element {
                                 show_notifications.set(false);
                                 h
                             }
+                            "copySelection" => {
+                                let text = e.lock().unwrap().copy_selection();
+                                if let Some(t) = text {
+                                    set_clipboard(&t);
+                                }
+                                true
+                            }
+                            "paste" => {
+                                if let Some(t) = get_clipboard() {
+                                    e.lock().unwrap().write_focused(t.as_bytes());
+                                }
+                                true
+                            }
                             _ => e.lock().unwrap().dispatch_action(&action),
                         };
                         if handled {
@@ -333,9 +371,15 @@ fn App() -> Element {
                         }
                     }
                 }
-                // 2) Otherwise, type into the focused pane's PTY.
+                // 2) Otherwise, type into the focused pane's PTY (and drop any
+                //    selection, like a real terminal does on keypress).
                 if let Some(bytes) = keys::key_event_to_bytes(&key, mods) {
-                    if e.lock().unwrap().write_focused(&bytes) {
+                    let wrote = {
+                        let mut g = e.lock().unwrap();
+                        g.clear_selection();
+                        g.write_focused(&bytes)
+                    };
+                    if wrote {
                         evt.prevent_default();
                         tick += 1;
                     }
@@ -794,6 +838,8 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
     // Divider-drag state and the measured pane-area rect (viewport pixels).
     let mut dragging = use_signal(|| Option::<DragInfo>::None);
     let mut area_rect = use_signal(|| Option::<(f64, f64, f64, f64)>::None);
+    // Pane whose terminal is currently being mouse-selected, if any.
+    let mut selecting = use_signal(|| Option::<PaneId>::None);
     rsx! {
         div {
             class: "pane-area",
@@ -821,7 +867,10 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                     }
                 }
             },
-            onmouseup: move |_| dragging.set(None),
+            onmouseup: move |_| {
+                dragging.set(None);
+                selecting.set(None);
+            },
             onmouseleave: move |_| dragging.set(None),
             for p in snap.panes.iter().cloned() {
                 {
@@ -861,6 +910,25 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                                 div {
                                     class: "grid",
                                     style: "font-size:{font}px;font-family:{family}, monospace;",
+                                    onmousedown: move |evt| {
+                                        // Begin a text selection at the clicked cell. Cell
+                                        // metrics mirror the rendered font (6px grid padding,
+                                        // line-height 1.2, ~0.6em advance for monospace).
+                                        let (row, col) = cell_at(&evt, font);
+                                        let mut g = engine().lock().unwrap();
+                                        g.state.focus_pane(pid);
+                                        g.begin_selection(pid, row, col);
+                                        selecting.set(Some(pid));
+                                        tick += 1;
+                                    },
+                                    onmousemove: move |evt| {
+                                        if selecting() == Some(pid) {
+                                            let (row, col) = cell_at(&evt, font);
+                                            engine().lock().unwrap().extend_selection(pid, row, col);
+                                            tick += 1;
+                                        }
+                                    },
+                                    onmouseup: move |_| selecting.set(None),
                                     onmounted: move |evt| {
                                         // Size the PTY/grid to the rendered pane using
                                         // monospace cell metrics derived from the font.
@@ -968,27 +1036,27 @@ html, body, #main, .app { height: 100%; margin: 0; }
     --bg:#181825; --panel:#1e1e2e; --deep:#11111b; --panel2:#313244;
     --border:#313244; --border-strong:#45475a; --text:#cdd6f4; --text-dim:#bac2de;
     --muted:#6c7086; --accent:#4c71f2; --on-accent:#ffffff;
-    --term-fg:#cdd6f4; --term-bg:#1e1e2e; --overlay:rgba(0,0,0,0.4);
+    --term-fg:#cdd6f4; --term-bg:#1e1e2e; --overlay:rgba(0,0,0,0.4); --sel-bg:#45475a;
 }
 .app.theme-light {
     --bg:#eff1f5; --panel:#e6e9ef; --deep:#dce0e8; --panel2:#ccd0da;
     --border:#ccd0da; --border-strong:#bcc0cc; --text:#4c4f69; --text-dim:#5c5f77;
     --muted:#8c8fa1; --accent:#1e66f5; --on-accent:#ffffff;
-    --term-fg:#4c4f69; --term-bg:#eff1f5; --overlay:rgba(60,60,80,0.35);
+    --term-fg:#4c4f69; --term-bg:#eff1f5; --overlay:rgba(60,60,80,0.35); --sel-bg:#acb0be;
 }
 /* "system" theme: dark by default, light when the OS prefers light. */
 .app.theme-system {
     --bg:#181825; --panel:#1e1e2e; --deep:#11111b; --panel2:#313244;
     --border:#313244; --border-strong:#45475a; --text:#cdd6f4; --text-dim:#bac2de;
     --muted:#6c7086; --accent:#4c71f2; --on-accent:#ffffff;
-    --term-fg:#cdd6f4; --term-bg:#1e1e2e; --overlay:rgba(0,0,0,0.4);
+    --term-fg:#cdd6f4; --term-bg:#1e1e2e; --overlay:rgba(0,0,0,0.4); --sel-bg:#45475a;
 }
 @media (prefers-color-scheme: light) {
     .app.theme-system {
         --bg:#eff1f5; --panel:#e6e9ef; --deep:#dce0e8; --panel2:#ccd0da;
         --border:#ccd0da; --border-strong:#bcc0cc; --text:#4c4f69; --text-dim:#5c5f77;
         --muted:#8c8fa1; --accent:#1e66f5; --on-accent:#ffffff;
-        --term-fg:#4c4f69; --term-bg:#eff1f5; --overlay:rgba(60,60,80,0.35);
+        --term-fg:#4c4f69; --term-bg:#eff1f5; --overlay:rgba(60,60,80,0.35); --sel-bg:#acb0be;
     }
 }
 /* Background-opacity model: siblings (.sidebar, .pane-area>.pane) are tinted
@@ -1046,6 +1114,8 @@ html, body, #main, .app { height: 100%; margin: 0; }
     font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
     line-height: 1.2; white-space: pre; padding: 6px; height: 100%;
     overflow: hidden; color: var(--term-fg); background: transparent;
+    /* Our own selection model draws the highlight, so suppress the webview's. */
+    user-select: none; -webkit-user-select: none; cursor: text;
 }
 .row { white-space: pre; }
 .browser { display: flex; flex-direction: column; height: 100%; }

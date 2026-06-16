@@ -50,6 +50,16 @@ pub struct Engine {
     /// Where `cmux.json` is written when settings change; `None` disables it.
     config_path: Option<PathBuf>,
     last_save: Instant,
+    /// Active mouse text selection (viewport cell coordinates), if any.
+    selection: Option<Selection>,
+}
+
+/// An in-progress / completed text selection over a pane's viewport.
+#[derive(Clone, Copy)]
+struct Selection {
+    pane: PaneId,
+    anchor: (usize, usize),
+    active: (usize, usize),
 }
 
 impl Engine {
@@ -80,6 +90,7 @@ impl Engine {
             session_path,
             config_path: None,
             last_save: Instant::now(),
+            selection: None,
         };
         engine.ensure_runtimes();
         engine
@@ -295,6 +306,59 @@ impl Engine {
         match self.state.focused_pane() {
             Some(p) => self.write_pane(p, bytes),
             None => false,
+        }
+    }
+
+    // ---- text selection & clipboard ------------------------------------
+
+    /// Begin a selection in `pane` at viewport cell (`row`, `col`).
+    pub fn begin_selection(&mut self, pane: PaneId, row: usize, col: usize) {
+        self.selection = Some(Selection {
+            pane,
+            anchor: (row, col),
+            active: (row, col),
+        });
+    }
+
+    /// Extend the in-progress selection in `pane` to (`row`, `col`).
+    pub fn extend_selection(&mut self, pane: PaneId, row: usize, col: usize) {
+        if let Some(s) = &mut self.selection {
+            if s.pane == pane {
+                s.active = (row, col);
+            }
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    /// The normalized selection for `pane`, for rendering its highlight.
+    pub fn selection_for(&self, pane: PaneId) -> Option<crate::render::ViewportSelection> {
+        let s = self.selection.filter(|s| s.pane == pane)?;
+        Some(crate::render::ViewportSelection::new(s.anchor, s.active))
+    }
+
+    /// Extract the selected text from the pane's current viewport (trailing
+    /// blanks trimmed per line), or `None` if there is no selection.
+    pub fn copy_selection(&self) -> Option<String> {
+        let s = self.selection?;
+        let view = self.terminal_viewport(s.pane)?;
+        let sel = crate::render::ViewportSelection::new(s.anchor, s.active);
+        let mut lines = Vec::new();
+        for (r, row) in view.iter().enumerate() {
+            if let Some((lo, hi)) = sel.cols_for_row(r, row.len()) {
+                let text: String = row[lo..=hi]
+                    .iter()
+                    .map(|c| if c.c == '\0' { ' ' } else { c.c })
+                    .collect();
+                lines.push(text.trim_end().to_string());
+            }
+        }
+        if lines.is_empty() {
+            None
+        } else {
+            Some(lines.join("\n"))
         }
     }
 
@@ -881,6 +945,23 @@ mod tests {
         assert_eq!(e2.state.panes.len(), pane_count);
         let pane = e2.state.focused_pane().unwrap();
         assert!(e2.terminal(pane).is_some());
+    }
+
+    #[test]
+    fn selection_state_and_copy_plumbing() {
+        let mut e = engine();
+        let p = e.state.focused_pane().unwrap();
+        assert!(e.copy_selection().is_none());
+        assert!(e.selection_for(p).is_none());
+        e.begin_selection(p, 0, 0);
+        e.extend_selection(p, 0, 3);
+        assert!(e.selection_for(p).is_some());
+        // A selection over the (blank) viewport copies a (possibly empty) line;
+        // content correctness is covered by the render-layer tests.
+        assert!(e.copy_selection().is_some());
+        e.clear_selection();
+        assert!(e.copy_selection().is_none());
+        assert!(e.selection_for(p).is_none());
     }
 
     #[test]
