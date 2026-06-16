@@ -79,14 +79,16 @@ tracked here but marked ⬜.
 | Divider drag-to-resize | ✅ (`set_ratio_by_index`) |
 | Reopen most-recently-closed tab | ✅ |
 | Command palette (fuzzy) | ✅ (`ctrl+shift+p`) |
-| Next/previous surface cycling | ❌ (`nextTab`/`previousTab` bound but unwired) |
-| Close workspace | ❌ |
-| Reorder workspaces (drag) | ❌ |
-| Select workspace/surface by number ⌘1–9 | ❌ |
+| Next/previous tab cycling | ✅ (`ctrl+tab`/`ctrl+shift+tab`, `cmux next-tab`) |
+| Close workspace | ✅ (`ctrl+shift+q`, `cmux close-workspace`) |
+| Equalize splits | ✅ (`ctrl+shift+o`, `cmux equalize`) |
+| Zoom / maximize pane | ✅ (`ctrl+shift+m`, `cmux zoom`) |
+| Select workspace by number (`ctrl+1`–`ctrl+9`) | ✅ |
+| Reorder workspaces | 🟡 (`cmux reorder-workspace`; no sidebar drag yet) |
+| Select surface by number | ❌ |
 | Move tab/surface to another workspace | ❌ |
 | Close other tabs in pane | ❌ |
-| Equalize splits | ❌ |
-| Zoom / maximize pane | ❌ |
+| Swap panes / break / join | ❌ |
 | Swap panes / break / join | ❌ |
 | Reopen closed workspace / window | ❌ |
 | Focus history back/forward | ❌ |
@@ -109,7 +111,7 @@ tracked here but marked ⬜.
 | Mark all read (CLI + panel) | ✅ |
 | Jump to latest unread | ✅ |
 | Click notification → focus its pane | ✅ |
-| Per-item mark-read / dismiss | ❌ (mark-all only) |
+| Per-item mark-read / dismiss | ✅ (`cmux mark-read <id>` / `dismiss <id>`) |
 | `open-notification` / `jump-to-unread` as CLI verbs | ❌ (jump is shortcut-only) |
 | OS desktop notifications (notification center / libnotify) | ❌ |
 | Notification sounds (built-in + custom file) | ❌ (`notifications.sound` key stored, not played) |
@@ -143,11 +145,15 @@ focused subset (~23 verbs) over a Unix socket at
 | `browser` open + `navigate` | ✅ |
 | in-terminal `find` | ✅ |
 | pane resize | ✅ (`resize`) |
+| `equalize` / `zoom` (toggle) | ✅ |
+| `next-tab` / `prev-tab` | ✅ |
+| `close-workspace` / `reorder-workspace` | ✅ |
+| `mark-read <id>` / `dismiss <id>` | ✅ |
 | `identify` / `capabilities` / `system.tree` | ❌ |
 | window list/create/close/focus/`display` | ❌ |
 | `select-workspace` / next/prev/last workspace | ❌ (focus by id works) |
 | `move-surface` / `move-tab-to-new-workspace` / `split-off` | ❌ |
-| pane swap/break/join/zoom/`equalize-splits` | ❌ |
+| pane swap / break / join | ❌ |
 | `trigger-flash` | ❌ |
 | surface respawn / health / resume get/set/clear | ❌ |
 | workspace-group namespace | ❌ |
@@ -166,7 +172,7 @@ focused subset (~23 verbs) over a Unix socket at
 | `appearance.theme` (system/light/dark) | ✅ |
 | `appearance.fontSize` | ✅ |
 | `appearance.opacity` | ✅ |
-| `appearance.fontFamily` | 🟡 (stored, not applied) |
+| `appearance.fontFamily` | ✅ (applied to the terminal grid) |
 | `appearance.cursorStyle` | 🟡 (stored, no cursor drawn) |
 | `sidebar.position` (left/right) | ✅ |
 | `sidebar.width` | ✅ |
@@ -249,10 +255,11 @@ cloud backend, or the web backend, and are intentionally not part of cmux-linux:
   title/notify, bell, theming, opacity, resize — ✅. Missing the big ones:
   **mouse selection + copy/paste**, OSC 8 hyperlinks, IME, copy mode.
 - **Layout/navigation:** workspaces, vertical tabs, splits, focus nav, divider
-  drag, reorder, reopen-tab, palette — ✅. Missing: tab cycling, equalize/zoom,
-  move-to-workspace, workspace groups, multiple windows, right sidebar.
-- **Notifications:** rings/badges/feed/OSC/bell/jump — ✅. Missing: OS desktop
-  notifications, sounds, hooks, per-item dismiss.
+  drag, tab reorder + cycling, equalize, zoom, close/select workspace,
+  reopen-tab, palette — ✅. Missing: move-to-workspace, workspace groups,
+  multiple windows, right sidebar.
+- **Notifications:** rings/badges/feed/OSC/bell/jump, per-item mark-read +
+  dismiss — ✅. Missing: OS desktop notifications, sounds, hooks.
 - **CLI/config/settings:** ~23 socket verbs, dotted-path config, live Settings,
   editable shortcuts — ✅. Missing: window/group/move/flash/respawn verbs,
   custom actions, shortcut UI editor.

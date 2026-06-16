@@ -29,6 +29,18 @@ pub fn default_shortcuts() -> BTreeMap<String, String> {
         ("jumpToLatestNotification", "ctrl+shift+j"),
         ("reopenClosedTab", "ctrl+shift+z"),
         ("openSettings", "ctrl+comma"),
+        ("equalizeSplits", "ctrl+shift+o"),
+        ("toggleZoom", "ctrl+shift+m"),
+        ("closeWorkspace", "ctrl+shift+q"),
+        ("selectWorkspace1", "ctrl+1"),
+        ("selectWorkspace2", "ctrl+2"),
+        ("selectWorkspace3", "ctrl+3"),
+        ("selectWorkspace4", "ctrl+4"),
+        ("selectWorkspace5", "ctrl+5"),
+        ("selectWorkspace6", "ctrl+6"),
+        ("selectWorkspace7", "ctrl+7"),
+        ("selectWorkspace8", "ctrl+8"),
+        ("selectWorkspace9", "ctrl+9"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))

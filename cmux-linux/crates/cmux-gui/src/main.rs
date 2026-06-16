@@ -150,6 +150,7 @@ struct Snapshot {
     sidebar_width: f32,
     sidebar_left: bool,
     font_size: f32,
+    font_family: String,
     theme: &'static str,
     opacity: f32,
 }
@@ -235,6 +236,7 @@ fn snapshot() -> Snapshot {
         sidebar_width: e.config.sidebar.width,
         sidebar_left: e.config.sidebar.position == SidebarPosition::Left,
         font_size: e.config.appearance.font_size,
+        font_family: e.config.appearance.font_family.clone(),
         theme: match e.config.appearance.theme {
             cmux_config::Theme::Light => "light",
             cmux_config::Theme::Dark => "dark",
@@ -787,6 +789,8 @@ fn Sidebar(snap: Snapshot, tick: Signal<u64>, show_notifications: Signal<bool>) 
 #[component]
 fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
     let font = snap.font_size;
+    // Configured terminal font, always falling back to a monospace family.
+    let family = snap.font_family.clone();
     // Divider-drag state and the measured pane-area rect (viewport pixels).
     let mut dragging = use_signal(|| Option::<DragInfo>::None);
     let mut area_rect = use_signal(|| Option::<(f64, f64, f64, f64)>::None);
@@ -856,7 +860,7 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                             } else {
                                 div {
                                     class: "grid",
-                                    style: "font-size:{font}px;",
+                                    style: "font-size:{font}px;font-family:{family}, monospace;",
                                     onmounted: move |evt| {
                                         // Size the PTY/grid to the rendered pane using
                                         // monospace cell metrics derived from the font.

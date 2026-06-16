@@ -151,6 +151,44 @@ impl AppState {
         }
     }
 
+    /// Focus the next (`forward`) or previous tab in the active workspace,
+    /// wrapping around. Returns `false` if there are fewer than two tabs.
+    pub fn focus_adjacent_tab(&mut self, forward: bool) -> bool {
+        let Some(ws) = self.active_workspace else {
+            return false;
+        };
+        let Some(w) = self.workspace_mut(ws) else {
+            return false;
+        };
+        let n = w.tabs.len();
+        if n < 2 {
+            return false;
+        }
+        let cur = w
+            .active_tab
+            .and_then(|id| w.tabs.iter().position(|t| t.id == id))
+            .unwrap_or(0);
+        let next = if forward {
+            (cur + 1) % n
+        } else {
+            (cur + n - 1) % n
+        };
+        w.active_tab = Some(w.tabs[next].id);
+        true
+    }
+
+    /// Focus the workspace at 0-based `index` in sidebar order (drives the
+    /// "select workspace 1–9" shortcuts). Returns `false` if out of range.
+    pub fn focus_workspace_index(&mut self, index: usize) -> bool {
+        match self.workspaces.get(index).map(|w| w.id) {
+            Some(id) => {
+                self.active_workspace = Some(id);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Focus a pane, clearing its ring and marking its notifications read.
     pub fn focus_pane(&mut self, pane: PaneId) -> bool {
         let Some((ws, tab)) = self.locate_pane(pane) else {
@@ -239,6 +277,59 @@ impl AppState {
         }
     }
 
+    /// Reset divider ratios of the active tab to even splits.
+    pub fn equalize_active(&mut self) -> bool {
+        let Some(ws) = self.active_workspace else {
+            return false;
+        };
+        let Some(w) = self.workspace_mut(ws) else {
+            return false;
+        };
+        let Some(tab) = w.active_tab else {
+            return false;
+        };
+        match w.tabs.iter_mut().find(|t| t.id == tab) {
+            Some(t) => {
+                t.tree.equalize();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Toggle zoom (maximize) of the focused pane in the active tab. Returns
+    /// `true` if there is an active tab to toggle.
+    pub fn toggle_zoom(&mut self) -> bool {
+        let Some(ws) = self.active_workspace else {
+            return false;
+        };
+        let focused = self.focused_pane();
+        let Some(w) = self.workspace_mut(ws) else {
+            return false;
+        };
+        let Some(tab) = w.active_tab else {
+            return false;
+        };
+        match w.tabs.iter_mut().find(|t| t.id == tab) {
+            Some(t) => {
+                t.zoomed = if t.zoomed.is_some() { None } else { focused };
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The pane the active tab is zoomed to, if any and still present.
+    pub fn zoomed_pane(&self) -> Option<PaneId> {
+        let t = self.active_workspace()?.active_tab()?;
+        let z = t.zoomed?;
+        if t.tree.contains(z) {
+            Some(z)
+        } else {
+            None
+        }
+    }
+
     /// Close a pane. If its tab becomes empty the tab is closed too.
     pub fn close_pane(&mut self, pane: PaneId) -> bool {
         let Some((ws, tab)) = self.locate_pane(pane) else {
@@ -255,6 +346,9 @@ impl AppState {
             let next_focus = t.tree.first_leaf();
             if t.focused == Some(pane) {
                 t.focused = next_focus;
+            }
+            if t.zoomed == Some(pane) {
+                t.zoomed = None;
             }
             (removed, t.tree.is_empty(), next_focus)
         };
@@ -313,6 +407,38 @@ impl AppState {
     }
 
     // ---- tab / workspace ordering --------------------------------------
+
+    /// Close a workspace, pruning its panes and notifications. Re-points the
+    /// active workspace if the closed one was active. Returns `true` if it
+    /// existed.
+    pub fn close_workspace(&mut self, ws: WorkspaceId) -> bool {
+        let Some(idx) = self.workspaces.iter().position(|w| w.id == ws) else {
+            return false;
+        };
+        let removed = self.workspaces.remove(idx);
+        for t in &removed.tabs {
+            for p in t.panes() {
+                self.panes.remove(&p);
+                self.notifications.prune_pane(p);
+            }
+        }
+        if self.active_workspace == Some(ws) {
+            let new_idx = idx.min(self.workspaces.len().saturating_sub(1));
+            self.active_workspace = self.workspaces.get(new_idx).map(|w| w.id);
+        }
+        true
+    }
+
+    /// Move a workspace to a new index in sidebar order.
+    pub fn reorder_workspace(&mut self, ws: WorkspaceId, to: usize) -> bool {
+        let Some(from) = self.workspaces.iter().position(|w| w.id == ws) else {
+            return false;
+        };
+        let to = to.min(self.workspaces.len().saturating_sub(1));
+        let w = self.workspaces.remove(from);
+        self.workspaces.insert(to, w);
+        true
+    }
 
     /// Move a tab to a new index within its workspace.
     pub fn reorder_tab(&mut self, ws: WorkspaceId, tab: TabId, to: usize) -> bool {
@@ -395,6 +521,16 @@ impl AppState {
             self.notifications.mark_pane_read(pane);
         }
         Some(id)
+    }
+
+    /// Mark a single notification (by id) read. Returns `true` if it exists.
+    pub fn mark_notification_read(&mut self, id: u64) -> bool {
+        self.notifications.mark_read(id)
+    }
+
+    /// Remove a single notification by id. Returns `true` if it existed.
+    pub fn dismiss_notification(&mut self, id: u64) -> bool {
+        self.notifications.dismiss(id)
     }
 
     pub fn set_ring(&mut self, pane: PaneId, ring: RingState) -> bool {
@@ -575,6 +711,99 @@ mod tests {
         assert!(s.reorder_tab(ws, t2, 0));
         let order: Vec<_> = s.workspace(ws).unwrap().tabs.iter().map(|t| t.id).collect();
         assert_eq!(order, vec![t2, t1]);
+    }
+
+    #[test]
+    fn focus_adjacent_tab_wraps() {
+        let (mut s, ws) = seeded();
+        let t1 = s.workspace(ws).unwrap().tabs[0].id;
+        let t2 = s.add_tab(ws).unwrap();
+        // active is t2; next wraps to t1, prev wraps back to t2.
+        assert!(s.focus_adjacent_tab(true));
+        assert_eq!(s.workspace(ws).unwrap().active_tab, Some(t1));
+        assert!(s.focus_adjacent_tab(false));
+        assert_eq!(s.workspace(ws).unwrap().active_tab, Some(t2));
+    }
+
+    #[test]
+    fn focus_adjacent_tab_needs_two_tabs() {
+        let (mut s, _ws) = seeded();
+        assert!(!s.focus_adjacent_tab(true));
+    }
+
+    #[test]
+    fn focus_workspace_index_selects_by_position() {
+        let (mut s, ws1) = seeded();
+        let ws2 = s.new_workspace("second");
+        assert!(s.focus_workspace_index(0));
+        assert_eq!(s.active_workspace, Some(ws1));
+        assert!(s.focus_workspace_index(1));
+        assert_eq!(s.active_workspace, Some(ws2));
+        assert!(!s.focus_workspace_index(9));
+    }
+
+    #[test]
+    fn equalize_active_resets_dividers() {
+        let (mut s, _ws) = seeded();
+        s.split_focused(Orientation::Horizontal);
+        assert!(s.set_active_divider(0, 0.2));
+        assert!(s.equalize_active());
+        let t = s.active_workspace().unwrap().active_tab().unwrap();
+        let d = t.tree.dividers(crate::split::Rect::new(0.0, 0.0, 1.0, 1.0));
+        assert_eq!(d[0].ratio, 0.5);
+    }
+
+    #[test]
+    fn toggle_zoom_tracks_focused_pane() {
+        let (mut s, _ws) = seeded();
+        let a = s.focused_pane().unwrap();
+        let b = s.split_focused(Orientation::Horizontal).unwrap();
+        assert_eq!(s.zoomed_pane(), None);
+        assert!(s.toggle_zoom());
+        assert_eq!(s.zoomed_pane(), Some(b));
+        assert!(s.toggle_zoom());
+        assert_eq!(s.zoomed_pane(), None);
+        // Zoom a, then close it: zoom clears and doesn't dangle.
+        s.focus_pane(a);
+        s.toggle_zoom();
+        assert_eq!(s.zoomed_pane(), Some(a));
+        s.close_pane(a);
+        assert_eq!(s.zoomed_pane(), None);
+    }
+
+    #[test]
+    fn close_workspace_prunes_and_repoints_active() {
+        let (mut s, ws1) = seeded();
+        let p1 = s.focused_pane().unwrap();
+        let ws2 = s.new_workspace("second");
+        s.focus_workspace(ws1);
+        assert!(s.close_workspace(ws1));
+        assert!(s.workspace(ws1).is_none());
+        assert!(s.pane(p1).is_none());
+        assert_eq!(s.active_workspace, Some(ws2));
+        assert!(!s.close_workspace(WorkspaceId(999)));
+    }
+
+    #[test]
+    fn reorder_workspace_moves_it() {
+        let (mut s, ws1) = seeded();
+        let ws2 = s.new_workspace("second");
+        assert!(s.reorder_workspace(ws2, 0));
+        let order: Vec<_> = s.workspaces.iter().map(|w| w.id).collect();
+        assert_eq!(order, vec![ws2, ws1]);
+    }
+
+    #[test]
+    fn dismiss_and_mark_one_notification() {
+        let (mut s, ws) = seeded();
+        let bg = s.workspace(ws).unwrap().tabs[0].focused.unwrap();
+        s.add_tab(ws);
+        let id = s.notify(bg, "a", "", 1).unwrap();
+        let id2 = s.notify(bg, "b", "", 2).unwrap();
+        assert!(s.mark_notification_read(id));
+        assert_eq!(s.notifications.unread_count(), 1);
+        assert!(s.dismiss_notification(id2));
+        assert_eq!(s.notifications.entries().len(), 1);
     }
 
     #[test]

@@ -100,6 +100,22 @@ pub enum Request {
     NavigateBrowser { pane: PaneId, url: String },
     /// Search a pane's scrollback + screen for `query`.
     Find { pane: PaneId, query: String },
+    /// Close a workspace by id.
+    CloseWorkspace { workspace: WorkspaceId },
+    /// Move a workspace to a new 0-based sidebar index.
+    ReorderWorkspace { workspace: WorkspaceId, index: usize },
+    /// Reset divider ratios of the active tab to even splits.
+    Equalize,
+    /// Toggle zoom (maximize) of the focused pane in the active tab.
+    ToggleZoom,
+    /// Focus the next tab in the active workspace (wrapping).
+    NextTab,
+    /// Focus the previous tab in the active workspace (wrapping).
+    PrevTab,
+    /// Mark a single notification (by id) read.
+    MarkNotificationRead { id: u64 },
+    /// Remove a single notification by id.
+    DismissNotification { id: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

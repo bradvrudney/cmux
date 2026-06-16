@@ -74,8 +74,20 @@ construction, not feature parity with the macOS app.
       (`ctrl+shift+f` find bar with match count and next; `cmux find <pane>
       <query>` from the CLI). Match navigation scrolls the pane to the hit.
 
+- [x] **Layout & control additions** — equalize splits (`ctrl+shift+o` /
+      `cmux equalize`), zoom/maximize the focused pane (`ctrl+shift+m` /
+      `cmux zoom`), next/previous tab cycling (`ctrl+tab` / `ctrl+shift+tab`,
+      `cmux next-tab`/`prev-tab`), select workspace 1–9 (`ctrl+1`…`ctrl+9`),
+      close workspace (`ctrl+shift+q` / `cmux close-workspace`), reorder
+      workspaces (`cmux reorder-workspace`), per-item notification mark-read /
+      dismiss (`cmux mark-read <id>` / `dismiss <id>`), and the configured
+      `appearance.fontFamily` is now applied to the terminal grid. All routed
+      through the shared `Engine` action path (keyboard + palette + CLI).
+
 ## Planned
 
+- [ ] Text selection + clipboard copy/paste in terminal panes (largest gap).
+- [ ] OS desktop notifications + sounds; OSC 8 hyperlinks with click-to-open.
 - [ ] Scriptable browser API (upstream's agent-browser port) on the browser pane.
 - [ ] Highlight find matches in-place (currently scrolls to the match line).
 

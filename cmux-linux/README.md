@@ -63,13 +63,26 @@ cmux ping                              # check the app is reachable
 cmux list-workspaces                   # print the workspace/tab/pane tree
 cmux send --pane surface:3 "ls -la"    # type into a pane
 cmux send-key ctrl+c                   # send a chord to the focused pane
-cmux focus surface:5                   # focus a pane
+cmux focus surface:5                   # focus a pane (or workspace:N / tab:N)
 cmux focus-dir left                    # move focus within the active tab
 cmux split vertical                    # split the focused pane
+cmux equalize                          # reset divider ratios in the active tab
+cmux zoom                              # toggle maximize of the focused pane
+cmux next-tab / cmux prev-tab          # cycle tabs in the active workspace
+cmux new-workspace proj                # create a workspace
+cmux close-workspace workspace:2       # close a workspace
+cmux reorder-workspace workspace:2 0   # move a workspace in the sidebar
 cmux notify surface:3 "Claude" "needs input"
+cmux notifications                     # list the feed
+cmux mark-read [id]                    # mark one (id) or all notifications read
+cmux dismiss 0                         # remove one notification by id
 cmux config get appearance.fontSize
 cmux config set appearance.theme dark
 ```
+
+Keyboard: `ctrl+shift+o` equalize, `ctrl+shift+m` zoom, `ctrl+shift+q` close
+workspace, `ctrl+1`…`ctrl+9` select workspace 1–9, `ctrl+tab` /
+`ctrl+shift+tab` cycle tabs (all rebindable in `cmux.json`).
 
 The socket path is `$CMUX_SOCKET` or `$XDG_RUNTIME_DIR/cmux/control.sock`.
 

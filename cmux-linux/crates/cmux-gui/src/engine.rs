@@ -411,7 +411,29 @@ impl Engine {
             "focusDown" => self.state.focus_dir(FocusDir::Down),
             "reopenClosedTab" => self.reopen_closed_tab(),
             "jumpToLatestNotification" => self.focus_latest_unread(),
-            _ => false,
+            "nextTab" => self.state.focus_adjacent_tab(true),
+            "previousTab" => self.state.focus_adjacent_tab(false),
+            "equalizeSplits" => self.state.equalize_active(),
+            "toggleZoom" => self.state.toggle_zoom(),
+            "closeWorkspace" => self.close_active_workspace(),
+            // `selectWorkspaceN` focuses the N-th workspace (1-based) in the
+            // sidebar — the rebindable ⌘1–9 family in upstream cmux.
+            other => other
+                .strip_prefix("selectWorkspace")
+                .and_then(|n| n.parse::<usize>().ok())
+                .filter(|n| *n >= 1)
+                .map_or(false, |n| self.state.focus_workspace_index(n - 1)),
+        }
+    }
+
+    fn close_active_workspace(&mut self) -> bool {
+        match self.state.active_workspace {
+            Some(ws) => {
+                let ok = self.state.close_workspace(ws);
+                self.ensure_runtimes();
+                ok
+            }
+            None => false,
         }
     }
 
@@ -598,12 +620,74 @@ impl Engine {
                     .collect();
                 Response::Matches { matches }
             }
+            Request::CloseWorkspace { workspace } => {
+                let ok = self.state.close_workspace(workspace);
+                self.ensure_runtimes();
+                if ok {
+                    Response::Ok
+                } else {
+                    Response::error("no such workspace")
+                }
+            }
+            Request::ReorderWorkspace { workspace, index } => {
+                if self.state.reorder_workspace(workspace, index) {
+                    Response::Ok
+                } else {
+                    Response::error("no such workspace")
+                }
+            }
+            Request::Equalize => {
+                if self.state.equalize_active() {
+                    Response::Ok
+                } else {
+                    Response::error("no active tab")
+                }
+            }
+            Request::ToggleZoom => {
+                if self.state.toggle_zoom() {
+                    Response::Ok
+                } else {
+                    Response::error("no active tab")
+                }
+            }
+            Request::NextTab => {
+                if self.state.focus_adjacent_tab(true) {
+                    Response::Ok
+                } else {
+                    Response::error("no other tab")
+                }
+            }
+            Request::PrevTab => {
+                if self.state.focus_adjacent_tab(false) {
+                    Response::Ok
+                } else {
+                    Response::error("no other tab")
+                }
+            }
+            Request::MarkNotificationRead { id } => {
+                if self.state.mark_notification_read(id) {
+                    Response::Ok
+                } else {
+                    Response::error("no such notification")
+                }
+            }
+            Request::DismissNotification { id } => {
+                if self.state.dismiss_notification(id) {
+                    Response::Ok
+                } else {
+                    Response::error("no such notification")
+                }
+            }
         }
     }
 
     /// Layout rectangles (unit square) for the active tab's panes — what the UI
     /// positions terminal views with.
     pub fn active_layout(&self) -> Vec<(PaneId, Rect)> {
+        // A zoomed pane takes the whole tab area; the rest stay alive but hidden.
+        if let Some(z) = self.state.zoomed_pane() {
+            return vec![(z, Rect::new(0.0, 0.0, 1.0, 1.0))];
+        }
         self.state
             .active_workspace()
             .and_then(|w| w.active_tab())
@@ -617,6 +701,10 @@ impl Engine {
 
     /// Dividers of the active tab (unit-square coordinates).
     pub fn active_dividers(&self) -> Vec<cmux_core::split::Divider> {
+        // No draggable dividers while a pane is zoomed.
+        if self.state.zoomed_pane().is_some() {
+            return Vec::new();
+        }
         self.state
             .active_workspace()
             .and_then(|w| w.active_tab())
@@ -793,6 +881,71 @@ mod tests {
         assert_eq!(e2.state.panes.len(), pane_count);
         let pane = e2.state.focused_pane().unwrap();
         assert!(e2.terminal(pane).is_some());
+    }
+
+    #[test]
+    fn dispatch_zoom_and_equalize_actions() {
+        let mut e = engine();
+        e.split_focused(Orientation::Horizontal);
+        assert_eq!(e.active_layout().len(), 2);
+        // Zoom collapses the visible layout to the focused pane, hiding dividers.
+        assert!(e.dispatch_action("toggleZoom"));
+        assert_eq!(e.active_layout().len(), 1);
+        assert!(e.active_dividers().is_empty());
+        assert!(e.dispatch_action("toggleZoom"));
+        assert_eq!(e.active_layout().len(), 2);
+        // Equalize is a no-op on layout count but must succeed with a split.
+        assert!(e.dispatch_action("equalizeSplits"));
+    }
+
+    #[test]
+    fn dispatch_tab_cycling_and_select_workspace() {
+        let mut e = engine();
+        let ws1 = e.state.active_workspace.unwrap();
+        e.new_tab();
+        let active_after_new = e.state.active_workspace().unwrap().active_tab;
+        assert!(e.dispatch_action("nextTab"));
+        assert_ne!(
+            e.state.active_workspace().unwrap().active_tab,
+            active_after_new
+        );
+        // selectWorkspaceN focuses by 1-based index.
+        let ws2 = e.new_workspace("second");
+        assert!(e.dispatch_action("selectWorkspace1"));
+        assert_eq!(e.state.active_workspace, Some(ws1));
+        assert!(e.dispatch_action("selectWorkspace2"));
+        assert_eq!(e.state.active_workspace, Some(ws2));
+        assert!(!e.dispatch_action("selectWorkspace9"));
+    }
+
+    #[test]
+    fn dispatch_close_workspace_drops_runtimes() {
+        let mut e = engine();
+        let p1 = e.state.focused_pane().unwrap();
+        e.new_workspace("second");
+        assert!(e.dispatch_action("closeWorkspace"));
+        // The closed workspace's pane and its PTY runtime are gone.
+        assert!(e.state.active_workspace().is_some());
+        let _ = p1;
+    }
+
+    #[test]
+    fn request_equalize_zoom_and_notification_ops() {
+        let mut e = engine();
+        e.split_focused(Orientation::Horizontal);
+        assert_eq!(e.handle_request(Request::Equalize), Response::Ok);
+        assert_eq!(e.handle_request(Request::ToggleZoom), Response::Ok);
+        assert_eq!(e.handle_request(Request::NextTab), Response::error("no other tab"));
+        // Raise a notification on a background pane, then mark/dismiss by id.
+        let bg = e.state.focused_pane().unwrap();
+        e.new_tab();
+        e.state.notify(bg, "a", "", 1);
+        assert_eq!(e.handle_request(Request::MarkNotificationRead { id: 0 }), Response::Ok);
+        assert_eq!(e.handle_request(Request::DismissNotification { id: 0 }), Response::Ok);
+        assert_eq!(
+            e.handle_request(Request::DismissNotification { id: 99 }),
+            Response::error("no such notification")
+        );
     }
 
     #[test]

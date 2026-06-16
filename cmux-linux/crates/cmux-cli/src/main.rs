@@ -121,7 +121,19 @@ fn parse(args: &[String]) -> Result<Option<Request>, String> {
         "ping" => Request::Ping,
         "list-workspaces" | "ls" => Request::ListWorkspaces,
         "notifications" | "notes" => Request::ListNotifications,
-        "mark-read" => Request::MarkAllRead,
+        // `mark-read` with no id marks everything; with an id marks just that one.
+        "mark-read" => match rest.first() {
+            Some(id) => Request::MarkNotificationRead {
+                id: id.parse::<u64>().map_err(|_| "id must be a number")?,
+            },
+            None => Request::MarkAllRead,
+        },
+        "dismiss" => {
+            let id = rest.first().ok_or("dismiss requires a notification id")?;
+            Request::DismissNotification {
+                id: id.parse::<u64>().map_err(|_| "id must be a number")?,
+            }
+        }
         "rename-tab" => {
             let tab = rest.first().ok_or("rename-tab requires a tab id")?;
             let title = rest.get(1..).map(|s| s.join(" ")).unwrap_or_default();
@@ -246,6 +258,28 @@ fn parse(args: &[String]) -> Result<Option<Request>, String> {
                 pane: PaneId(parse_id(id)?),
             }
         }
+        "close-workspace" => {
+            let id = rest.first().ok_or("close-workspace requires a workspace id")?;
+            Request::CloseWorkspace {
+                workspace: WorkspaceId(parse_id(id)?),
+            }
+        }
+        "reorder-workspace" => {
+            let id = rest.first().ok_or("reorder-workspace requires a workspace id")?;
+            let index = rest
+                .get(1)
+                .ok_or("reorder-workspace requires an index")?
+                .parse::<usize>()
+                .map_err(|_| "index must be a number")?;
+            Request::ReorderWorkspace {
+                workspace: WorkspaceId(parse_id(id)?),
+                index,
+            }
+        }
+        "equalize" => Request::Equalize,
+        "zoom" => Request::ToggleZoom,
+        "next-tab" => Request::NextTab,
+        "prev-tab" => Request::PrevTab,
         "notify" => {
             let pane = rest.first().ok_or("notify requires a pane id")?;
             let title = rest.get(1).cloned().unwrap_or_default();
