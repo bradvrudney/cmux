@@ -625,13 +625,22 @@ fn CommandPalette(
                 }
                 div { class: "palette-list",
                     for a in results.iter().cloned() {
-                        div {
-                            key: "{a.id}",
-                            class: "palette-item",
-                            onclick: move |_| run_palette_action(&a.id, tick, show_palette, show_notifications),
-                            span { class: "palette-label", "{a.label}" }
-                            if let Some(sc) = a.shortcut.clone() {
-                                span { class: "palette-chord", "{sc}" }
+                        {
+                            // Own the id in the click closure so the rsx key/label
+                            // interpolations can still borrow `a` (release rsx
+                            // expansion moves captured fields; debug hot-reload
+                            // does not, so this only fails to compile in release).
+                            let id = a.id.clone();
+                            rsx! {
+                                div {
+                                    key: "{a.id}",
+                                    class: "palette-item",
+                                    onclick: move |_| run_palette_action(&id, tick, show_palette, show_notifications),
+                                    span { class: "palette-label", "{a.label}" }
+                                    if let Some(sc) = a.shortcut.clone() {
+                                        span { class: "palette-chord", "{sc}" }
+                                    }
+                                }
                             }
                         }
                     }
