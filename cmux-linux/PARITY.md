@@ -51,7 +51,7 @@ tracked here but marked ⬜.
 | Mouse reporting to TUIs (SGR/X11) | ❌ |
 | Right-click context menu (copy/open) | ❌ |
 | Configurable font family | 🟡 (key stored; fixed monospace stack rendered) |
-| Cursor style (block/beam/underline) | 🟡 (key stored; no cursor drawn) |
+| Cursor style (block/bar/underline) | ✅ (rendered on the focused pane) |
 | Ligatures | ❌ |
 | IME / dead-key composition (CJK input) | ❌ |
 | Metal GPU renderer, IOSurface, CVDisplayLink | ⬜ (DOM cell grid instead) |
@@ -113,8 +113,8 @@ tracked here but marked ⬜.
 | Click notification → focus its pane | ✅ |
 | Per-item mark-read / dismiss | ✅ (`cmux mark-read <id>` / `dismiss <id>`) |
 | `open-notification` / `jump-to-unread` as CLI verbs | ❌ (jump is shortcut-only) |
-| OS desktop notifications (notification center / libnotify) | ❌ |
-| Notification sounds (built-in + custom file) | ❌ (`notifications.sound` key stored, not played) |
+| OS desktop notifications (freedesktop / D-Bus) | ✅ (via notify-rust; non-focused panes) |
+| Notification sounds | 🟡 (freedesktop sound-name hint when `notifications.sound`; no custom file) |
 | Notification hooks in `cmux.json` | ❌ |
 | iPhone forwarding, cross-device dismiss-sync | ⬜ |
 | Dock badge | ⬜ (macOS) |
@@ -259,7 +259,8 @@ cloud backend, or the web backend, and are intentionally not part of cmux-linux:
   reopen-tab, palette — ✅. Missing: move-to-workspace, workspace groups,
   multiple windows, right sidebar.
 - **Notifications:** rings/badges/feed/OSC/bell/jump, per-item mark-read +
-  dismiss — ✅. Missing: OS desktop notifications, sounds, hooks.
+  dismiss, OS desktop notifications (D-Bus) + sound hint — ✅. Missing: hooks,
+  custom sound files.
 - **CLI/config/settings:** ~23 socket verbs, dotted-path config, live Settings,
   editable shortcuts — ✅. Missing: window/group/move/flash/respawn verbs,
   custom actions, shortcut UI editor.

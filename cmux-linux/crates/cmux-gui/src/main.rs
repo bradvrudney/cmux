@@ -98,6 +98,8 @@ struct PaneView {
     rows: Vec<Vec<render::StyledRun>>,
     /// `Some(url)` for a browser pane; `None` for a terminal pane.
     browser_url: Option<String>,
+    /// Terminal cursor `(row, col)` to draw (focused pane, live screen only).
+    cursor: Option<(usize, usize)>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -151,6 +153,7 @@ struct Snapshot {
     sidebar_left: bool,
     font_size: f32,
     font_family: String,
+    cursor_style: &'static str,
     theme: &'static str,
     opacity: f32,
 }
@@ -200,6 +203,12 @@ fn snapshot() -> Snapshot {
                 .map(|v| render::viewport_to_runs_sel(&v, e.selection_for(id)))
                 .unwrap_or_default(),
             browser_url: e.state.pane(id).and_then(|p| p.browser_url().map(String::from)),
+            // Only the focused terminal pane shows a cursor.
+            cursor: if Some(id) == focused {
+                e.cursor_for(id)
+            } else {
+                None
+            },
         })
         .collect();
 
@@ -237,6 +246,11 @@ fn snapshot() -> Snapshot {
         sidebar_left: e.config.sidebar.position == SidebarPosition::Left,
         font_size: e.config.appearance.font_size,
         font_family: e.config.appearance.font_family.clone(),
+        cursor_style: match e.config.appearance.cursor_style {
+            cmux_config::CursorStyle::Block => "block",
+            cmux_config::CursorStyle::Bar => "bar",
+            cmux_config::CursorStyle::Underline => "underline",
+        },
         theme: match e.config.appearance.theme {
             cmux_config::Theme::Light => "light",
             cmux_config::Theme::Dark => "dark",
@@ -835,6 +849,10 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
     let font = snap.font_size;
     // Configured terminal font, always falling back to a monospace family.
     let family = snap.font_family.clone();
+    // Monospace cell metrics for cursor placement (mirror `cell_at`).
+    let char_w = font as f64 * 0.6;
+    let line_h = font as f64 * 1.2;
+    let cursor_style = snap.cursor_style;
     // Divider-drag state and the measured pane-area rect (viewport pixels).
     let mut dragging = use_signal(|| Option::<DragInfo>::None);
     let mut area_rect = use_signal(|| Option::<(f64, f64, f64, f64)>::None);
@@ -967,6 +985,18 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                                         div { key: "{ri}", class: "row",
                                             for (ci, run) in runs.iter().enumerate() {
                                                 span { key: "{ci}", style: "{run.style}", "{run.text}" }
+                                            }
+                                        }
+                                    }
+                                    if let Some((cr, cc)) = p.cursor {
+                                        {
+                                            let cx = cc as f64 * char_w;
+                                            let cy = cr as f64 * line_h;
+                                            rsx! {
+                                                div {
+                                                    class: "cursor cursor-{cursor_style}",
+                                                    style: "left:calc(6px + {cx}px);top:calc(6px + {cy}px);width:{char_w}px;height:{line_h}px;",
+                                                }
                                             }
                                         }
                                     }
@@ -1114,9 +1144,14 @@ html, body, #main, .app { height: 100%; margin: 0; }
     font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
     line-height: 1.2; white-space: pre; padding: 6px; height: 100%;
     overflow: hidden; color: var(--term-fg); background: transparent;
+    position: relative;
     /* Our own selection model draws the highlight, so suppress the webview's. */
     user-select: none; -webkit-user-select: none; cursor: text;
 }
+.cursor { position: absolute; pointer-events: none; box-sizing: border-box; }
+.cursor-block { background: var(--term-fg); opacity: 0.5; }
+.cursor-bar { border-left: 2px solid var(--accent); }
+.cursor-underline { border-bottom: 2px solid var(--term-fg); }
 .row { white-space: pre; }
 .browser { display: flex; flex-direction: column; height: 100%; }
 .browser-url {

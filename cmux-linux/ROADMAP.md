@@ -89,9 +89,16 @@ construction, not feature parity with the macOS app.
       paste with `ctrl+shift+v` via the system clipboard (`arboard`, Wayland +
       X11). Typing clears the selection, like a real terminal.
 
+- [x] **OS desktop notifications + cursor** — feed notifications (OSC 9/777,
+      bell, `cmux notify`) for non-focused panes post a freedesktop D-Bus
+      notification (`notify-rust`), with a sound-name hint when
+      `notifications.sound` is set. The focused terminal pane draws a cursor
+      (block / bar / underline per `appearance.cursorStyle`).
+
 ## Planned
 
-- [ ] OS desktop notifications + sounds; OSC 8 hyperlinks with click-to-open.
+- [ ] OSC 8 hyperlinks with click-to-open; OSC 7 working-directory tracking.
+- [ ] Custom notification sound files.
 - [ ] Scriptable browser API (upstream's agent-browser port) on the browser pane.
 - [ ] Highlight find matches in-place (currently scrolls to the match line).
 

@@ -219,13 +219,20 @@ impl Engine {
         }
         let now = Self::now_ms();
         if self.config.notifications.enabled {
+            let focused = self.state.focused_pane();
             // OSC-driven notifications are explicit app intent — always raise.
             for (pane, title, body) in osc_notifs {
-                self.state.notify(pane, title, body, now);
+                self.state.notify(pane, title.as_str(), body.as_str(), now);
+                if Some(pane) != focused {
+                    self.post_desktop_notification(&title, &body);
+                }
             }
             if self.config.notifications.ring_on_bell {
                 for pane in bells {
                     self.state.notify(pane, "Bell", "terminal bell", now);
+                    if Some(pane) != focused {
+                        self.post_desktop_notification("Bell", "terminal bell");
+                    }
                 }
             }
         }
@@ -306,6 +313,34 @@ impl Engine {
         match self.state.focused_pane() {
             Some(p) => self.write_pane(p, bytes),
             None => false,
+        }
+    }
+
+    /// Post a best-effort freedesktop (D-Bus) desktop notification. Silently
+    /// no-ops when no notification daemon is reachable (headless/CI).
+    fn post_desktop_notification(&self, title: &str, body: &str) {
+        let mut n = notify_rust::Notification::new();
+        n.summary(if title.is_empty() { "cmux" } else { title })
+            .body(body)
+            .appname("cmux");
+        if self.config.notifications.sound {
+            n.sound_name("message");
+        }
+        let _ = n.show();
+    }
+
+    /// The terminal cursor `(row, col)` for `pane`, but only on the live screen
+    /// (not scrolled into history) and when the cursor is visible.
+    pub fn cursor_for(&self, pane: PaneId) -> Option<(usize, usize)> {
+        let rt = self.runtimes.get(&pane)?;
+        if rt.scroll_offset != 0 {
+            return None;
+        }
+        let c = rt.term.cursor();
+        if c.visible {
+            Some((c.row, c.col))
+        } else {
+            None
         }
     }
 
@@ -599,8 +634,17 @@ impl Engine {
                 }
             }
             Request::Notify { pane, title, body } => {
-                match self.state.notify(pane, title, body, Self::now_ms()) {
-                    Some(_) => Response::Ok,
+                let focused = self.state.focused_pane();
+                match self
+                    .state
+                    .notify(pane, title.as_str(), body.as_str(), Self::now_ms())
+                {
+                    Some(_) => {
+                        if self.config.notifications.enabled && Some(pane) != focused {
+                            self.post_desktop_notification(&title, &body);
+                        }
+                        Response::Ok
+                    }
                     None => Response::error("no such pane"),
                 }
             }
@@ -945,6 +989,23 @@ mod tests {
         assert_eq!(e2.state.panes.len(), pane_count);
         let pane = e2.state.focused_pane().unwrap();
         assert!(e2.terminal(pane).is_some());
+    }
+
+    #[test]
+    fn cursor_for_terminal_but_not_browser() {
+        let mut e = engine();
+        let p = e.state.focused_pane().unwrap();
+        // A live terminal pane reports a visible cursor on the live screen.
+        assert!(e.cursor_for(p).is_some());
+        // A browser pane has no PTY runtime, hence no cursor.
+        let b = match e.handle_request(Request::OpenBrowser {
+            url: "https://example.com".into(),
+            orientation: SplitDir::Horizontal,
+        }) {
+            Response::Created { id } => PaneId(id),
+            other => panic!("expected Created, got {other:?}"),
+        };
+        assert!(e.cursor_for(b).is_none());
     }
 
     #[test]
