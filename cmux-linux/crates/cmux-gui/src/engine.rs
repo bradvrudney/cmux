@@ -821,7 +821,14 @@ mod tests {
     fn osc_title_sets_pane_title() {
         let mut e = engine();
         let p = e.state.focused_pane().unwrap();
-        e.write_pane(p, b"printf '\\033]0;my-task\\007'\n");
+        // Emit an OSC 0 title, then keep the shell busy with `sleep` so it does
+        // not immediately draw a new prompt. Interactive shells (e.g. Fedora's
+        // bash with `PROMPT_COMMAND='printf "\033]0;...\007"'`) re-assert their
+        // own window title on every prompt, which would clobber `my-task`
+        // before this loop samples it — unlike OSC notifications, the title is
+        // last-write-wins. Blocking on `sleep` holds `my-task` long enough to
+        // observe the PTY → terminal → pane.title wiring deterministically.
+        e.write_pane(p, b"printf '\\033]0;my-task\\007'; sleep 5\n");
         let mut titled = false;
         for _ in 0..40 {
             std::thread::sleep(std::time::Duration::from_millis(50));
