@@ -587,6 +587,22 @@ impl Engine {
         n > 0
     }
 
+    fn reopen_closed_workspace(&mut self) -> bool {
+        let ok = self.state.reopen_closed_workspace().is_some();
+        self.ensure_runtimes();
+        ok
+    }
+
+    /// Kill and respawn a pane's shell (e.g. after it exited), reusing its cwd.
+    pub fn respawn_pane(&mut self, pane: PaneId) -> bool {
+        if !self.state.panes.contains_key(&pane) {
+            return false;
+        }
+        self.runtimes.remove(&pane); // Drop kills the old child.
+        self.ensure_runtimes(); // Respawns a fresh shell in the pane's cwd.
+        true
+    }
+
     /// Focus the pane of the most recent unread notification ("jump to latest").
     fn focus_latest_unread(&mut self) -> bool {
         match self.state.notifications.latest_unread().map(|n| n.pane) {
@@ -618,7 +634,10 @@ impl Engine {
             "focusUp" => self.state.focus_dir(FocusDir::Up),
             "focusDown" => self.state.focus_dir(FocusDir::Down),
             "reopenClosedTab" => self.reopen_closed_tab(),
+            "reopenClosedWorkspace" => self.reopen_closed_workspace(),
             "closeOtherTabs" => self.close_other_tabs(),
+            "focusBack" => self.state.focus_history_step(false),
+            "focusForward" => self.state.focus_history_step(true),
             "jumpToLatestNotification" => self.focus_latest_unread(),
             "nextTab" => self.state.focus_adjacent_tab(true),
             "previousTab" => self.state.focus_adjacent_tab(false),
@@ -994,6 +1013,10 @@ impl Engine {
                     Response::error("no such action")
                 }
             }
+            Request::Respawn { pane } => match pane.or_else(|| self.state.focused_pane()) {
+                Some(p) if self.respawn_pane(p) => Response::Ok,
+                _ => Response::error("no such pane"),
+            },
         }
     }
 

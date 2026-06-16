@@ -131,6 +131,8 @@ pub enum Request {
     TriggerFlash { pane: Option<PaneId> },
     /// Run a user-defined `cmux.json` action by id.
     RunAction { id: String },
+    /// Kill and respawn a pane's shell (focused pane if `None`).
+    Respawn { pane: Option<PaneId> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

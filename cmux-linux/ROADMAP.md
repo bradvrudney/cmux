@@ -117,11 +117,24 @@ construction, not feature parity with the macOS app.
       pane), and `newWorkspaceCommand` in `cmux.json` runs in each new
       workspace's first pane.
 
-## Planned
+- [x] **Focus history, reopen workspace & respawn** — `ctrl+shift+←`/`→` walk
+      the focus history (skipping closed panes); the command palette can reopen
+      a closed workspace; `cmux respawn [pane]` kills and restarts a pane's
+      shell (reusing its cwd).
+
+## Planned (deferred — larger subsystems)
 
 - [ ] OSC 8 escape-sequence hyperlinks (per-cell link data).
-- [ ] Custom notification sound files; per-action notification hooks.
 - [ ] Scrollback persistence across restart; horizontal tab-bar layout.
+- [ ] Workspace groups; in-app Settings keyboard-shortcut editor.
+- [ ] Custom notification sound files; per-action notification hooks.
+
+## Out of scope on Linux (not portable / different product surface)
+
+See `PARITY.md` §9. In brief: multiple top-level windows, the right-sidebar
+tool panels, agent-session web renderers, the Cloud-VM control plane, the iOS
+companion app, AppleScript, the Dock tile / menu-bar extra, IME composition,
+and the Metal/Ghostty GPU renderer.
 - [ ] Scriptable browser API (upstream's agent-browser port) on the browser pane.
 - [ ] Highlight find matches in-place (currently scrolls to the match line).
 

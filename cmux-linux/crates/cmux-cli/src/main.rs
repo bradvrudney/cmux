@@ -305,6 +305,10 @@ fn parse(args: &[String]) -> Result<Option<Request>, String> {
             let id = rest.first().ok_or("run requires an action id")?.clone();
             Request::RunAction { id }
         }
+        "respawn" => {
+            let pane = rest.first().map(|p| parse_id(p).map(PaneId)).transpose()?;
+            Request::Respawn { pane }
+        }
         "notify" => {
             let pane = rest.first().ok_or("notify requires a pane id")?;
             let title = rest.get(1).cloned().unwrap_or_default();

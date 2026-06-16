@@ -44,7 +44,15 @@ pub struct AppState {
     pub notifications: NotificationFeed,
     #[serde(default)]
     closed_tabs: Vec<ClosedTab>,
+    #[serde(default)]
+    closed_workspaces: Vec<String>,
     ids: IdGen,
+    /// Focus history (visited panes) and the current position within it. Not
+    /// persisted — it is a within-session navigation aid.
+    #[serde(skip)]
+    focus_history: Vec<PaneId>,
+    #[serde(skip)]
+    focus_pos: usize,
 }
 
 impl AppState {
@@ -236,8 +244,13 @@ impl AppState {
         false
     }
 
-    /// Focus a pane, clearing its ring and marking its notifications read.
+    /// Focus a pane, clearing its ring and marking its notifications read, and
+    /// recording the move in focus history.
     pub fn focus_pane(&mut self, pane: PaneId) -> bool {
+        self.do_focus(pane, true)
+    }
+
+    fn do_focus(&mut self, pane: PaneId, record: bool) -> bool {
         let Some((ws, tab)) = self.locate_pane(pane) else {
             return false;
         };
@@ -252,7 +265,51 @@ impl AppState {
             p.ring = RingState::Idle;
         }
         self.notifications.mark_pane_read(pane);
+        if record {
+            self.record_focus(pane);
+        }
         true
+    }
+
+    fn record_focus(&mut self, pane: PaneId) {
+        if self.focus_history.get(self.focus_pos) == Some(&pane) {
+            return;
+        }
+        // Drop any forward history, then append (no consecutive duplicates).
+        self.focus_history.truncate(self.focus_pos + 1);
+        if self.focus_history.last() != Some(&pane) {
+            self.focus_history.push(pane);
+        }
+        const CAP: usize = 64;
+        if self.focus_history.len() > CAP {
+            let drop = self.focus_history.len() - CAP;
+            self.focus_history.drain(0..drop);
+        }
+        self.focus_pos = self.focus_history.len().saturating_sub(1);
+    }
+
+    /// Move backward (`forward = false`) or forward through focus history to the
+    /// nearest still-existing pane. Returns `false` if there is none.
+    pub fn focus_history_step(&mut self, forward: bool) -> bool {
+        let mut i = self.focus_pos;
+        loop {
+            if forward {
+                if i + 1 >= self.focus_history.len() {
+                    return false;
+                }
+                i += 1;
+            } else {
+                if i == 0 {
+                    return false;
+                }
+                i -= 1;
+            }
+            let p = self.focus_history[i];
+            if self.panes.contains_key(&p) {
+                self.focus_pos = i;
+                return self.do_focus(p, false);
+            }
+        }
     }
 
     /// Move focus spatially within the active tab.
@@ -497,11 +554,19 @@ impl AppState {
                 self.notifications.prune_pane(p);
             }
         }
+        self.closed_workspaces.push(removed.title.clone());
         if self.active_workspace == Some(ws) {
             let new_idx = idx.min(self.workspaces.len().saturating_sub(1));
             self.active_workspace = self.workspaces.get(new_idx).map(|w| w.id);
         }
         true
+    }
+
+    /// Reopen the most recently closed workspace (a fresh workspace with the
+    /// same title; panes are not restored). Returns the new workspace id.
+    pub fn reopen_closed_workspace(&mut self) -> Option<WorkspaceId> {
+        let title = self.closed_workspaces.pop()?;
+        Some(self.new_workspace(title))
     }
 
     /// Move a workspace to a new index in sidebar order.
@@ -914,6 +979,35 @@ mod tests {
         assert!(s.pane(p1).is_none());
         assert_eq!(s.active_workspace, Some(ws2));
         assert!(!s.close_workspace(WorkspaceId(999)));
+    }
+
+    #[test]
+    fn focus_history_back_and_forward() {
+        let (mut s, _ws) = seeded();
+        let a = s.focused_pane().unwrap();
+        let b = s.split_focused(Orientation::Horizontal).unwrap();
+        s.focus_pane(a);
+        s.focus_pane(b);
+        // History is [a, b, a, b] collapsed to visited order; step back to a.
+        assert!(s.focus_history_step(false));
+        assert_eq!(s.focused_pane(), Some(a));
+        assert!(s.focus_history_step(true));
+        assert_eq!(s.focused_pane(), Some(b));
+        // Stepping back skips panes that no longer exist.
+        s.focus_pane(a);
+        s.close_pane(b);
+        assert!(s.focus_history_step(false) || s.focused_pane() == Some(a));
+    }
+
+    #[test]
+    fn reopen_closed_workspace_restores_title() {
+        let (mut s, ws1) = seeded();
+        let ws2 = s.new_workspace("scratch");
+        assert!(s.close_workspace(ws2));
+        let reopened = s.reopen_closed_workspace().unwrap();
+        assert_eq!(s.workspace(reopened).unwrap().title, "scratch");
+        assert!(s.reopen_closed_workspace().is_none());
+        let _ = ws1;
     }
 
     #[test]

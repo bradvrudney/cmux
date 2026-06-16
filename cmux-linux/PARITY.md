@@ -92,8 +92,9 @@ tracked here but marked ⬜.
 | Close other tabs (in workspace) | ✅ (palette) |
 | Break / join panes | ❌ |
 | Swap panes / break / join | ❌ |
-| Reopen closed workspace / window | ❌ |
-| Focus history back/forward | ❌ |
+| Reopen closed workspace | ✅ (title restored; panes not) |
+| Reopen closed window | ❌ (single-window) |
+| Focus history back/forward | ✅ (`ctrl+shift+←`/`→`) |
 | Multiple windows | ❌ (single window) |
 | Pin workspace; workspace color/icon | ❌ |
 | Workspace groups (collapsible sections, anchors, per-cwd config) | ❌ |
@@ -153,11 +154,13 @@ focused subset (~23 verbs) over a Unix socket at
 | `move-tab` / `swap <dir>` | ✅ |
 | `mark-read <id>` / `dismiss <id>` | ✅ |
 | `identify` / `capabilities` / `trigger-flash` | ✅ |
-| window list/create/close/focus/`display` | ❌ |
+| `respawn` (kill + restart a pane's shell) | ✅ |
+| `run <id>` (custom action) | ✅ |
+| window list/create/close/focus/`display` | ❌ (single-window) |
 | `select-workspace` / next/prev/last workspace | ❌ (focus by id works) |
-| `move-surface` / `move-tab-to-new-workspace` / `split-off` | ❌ |
-| pane swap / break / join | ❌ |
-| surface respawn / health / resume get/set/clear | ❌ |
+| `move-surface` (move-tab covers tabs) / `split-off` | 🟡 / ❌ |
+| pane break / join | ❌ |
+| surface health / resume get/set/clear | ❌ |
 | workspace-group namespace | ❌ |
 | dismiss/open-notification, jump-to-unread (CLI) | ❌ |
 | `top` / `memory` | ❌ |
