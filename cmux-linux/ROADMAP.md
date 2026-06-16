@@ -107,10 +107,15 @@ construction, not feature parity with the macOS app.
       `/proc/<pid>/cwd` (OSC 7 is also parsed when a shell emits it). Plus
       "close other tabs" in the command palette.
 
+- [x] **Custom actions** — define `actions` in `cmux.json` (`command`, optional
+      `label`, `target: newTab | currentPane`); they appear in the command
+      palette and run via `cmux run <id>`, typing the command into a new tab or
+      the focused pane.
+
 ## Planned
 
 - [ ] OSC 8 escape-sequence hyperlinks (per-cell link data).
-- [ ] Custom notification sound files.
+- [ ] Custom notification sound files; per-action notification hooks.
 - [ ] Scriptable browser API (upstream's agent-browser port) on the browser pane.
 - [ ] Highlight find matches in-place (currently scrolls to the match line).
 

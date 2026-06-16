@@ -76,8 +76,16 @@ cmux notify surface:3 "Claude" "needs input"
 cmux notifications                     # list the feed
 cmux mark-read [id]                    # mark one (id) or all notifications read
 cmux dismiss 0                         # remove one notification by id
+cmux run deploy                        # run a custom cmux.json action
 cmux config get appearance.fontSize
 cmux config set appearance.theme dark
+```
+
+Custom actions live under `actions` in `cmux.json` and show up in the command
+palette:
+
+```json
+{ "actions": { "deploy": { "command": "make deploy", "label": "Deploy", "target": "currentPane" } } }
 ```
 
 Keyboard: drag to select terminal text, `ctrl+shift+c` / `ctrl+shift+v` to

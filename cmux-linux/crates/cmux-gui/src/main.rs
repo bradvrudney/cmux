@@ -646,11 +646,12 @@ fn CommandPalette(
     show_notifications: Signal<bool>,
 ) -> Element {
     let mut query = use_signal(String::new);
-    let shortcuts = {
+    let (shortcuts, custom) = {
         let g = engine().lock().unwrap();
-        g.config.keyboard_shortcuts.clone()
+        (g.config.keyboard_shortcuts.clone(), g.config.actions.clone())
     };
-    let all = palette::all_actions(&shortcuts);
+    let mut all = palette::all_actions(&shortcuts);
+    all.extend(palette::custom_actions(&custom));
     let results = palette::filter_actions(&query(), &all);
     let top = results.first().map(|a| a.id.clone());
 

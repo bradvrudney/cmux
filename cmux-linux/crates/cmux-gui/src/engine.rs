@@ -634,10 +634,31 @@ impl Engine {
                     .filter(|n| *n >= 1)
                 {
                     self.state.focus_pane_index(n - 1)
+                } else if self.config.actions.contains_key(other) {
+                    self.run_custom_action(other)
                 } else {
                     false
                 }
             }
+        }
+    }
+
+    /// Run a user-defined `cmux.json` action by id (open a tab or use the
+    /// current pane, then type the command). Returns `false` if unknown.
+    fn run_custom_action(&mut self, id: &str) -> bool {
+        let Some(def) = self.config.actions.get(id).cloned() else {
+            return false;
+        };
+        let mut line = def.command;
+        if !line.ends_with('\n') {
+            line.push('\n');
+        }
+        match def.target {
+            cmux_config::ActionTarget::NewTab => {
+                self.new_tab();
+                self.write_focused(line.as_bytes())
+            }
+            cmux_config::ActionTarget::CurrentPane => self.write_focused(line.as_bytes()),
         }
     }
 
@@ -950,6 +971,13 @@ impl Engine {
                     _ => Response::error("no such pane"),
                 }
             }
+            Request::RunAction { id } => {
+                if self.run_custom_action(&id) {
+                    Response::Ok
+                } else {
+                    Response::error("no such action")
+                }
+            }
         }
     }
 
@@ -1153,6 +1181,30 @@ mod tests {
         assert_eq!(e2.state.panes.len(), pane_count);
         let pane = e2.state.focused_pane().unwrap();
         assert!(e2.terminal(pane).is_some());
+    }
+
+    #[test]
+    fn run_custom_action_from_config() {
+        let mut e = engine();
+        e.config.actions.insert(
+            "hello".into(),
+            cmux_config::ActionDef {
+                command: "echo hi".into(),
+                label: None,
+                target: cmux_config::ActionTarget::CurrentPane,
+            },
+        );
+        assert_eq!(
+            e.handle_request(Request::RunAction { id: "hello".into() }),
+            Response::Ok
+        );
+        assert_eq!(
+            e.handle_request(Request::RunAction { id: "nope".into() }),
+            Response::error("no such action")
+        );
+        // The same id also runs through the shared dispatch path.
+        assert!(e.dispatch_action("hello"));
+        assert!(!e.dispatch_action("unbound-id"));
     }
 
     #[test]

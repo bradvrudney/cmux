@@ -301,6 +301,10 @@ fn parse(args: &[String]) -> Result<Option<Request>, String> {
             let d = rest.first().ok_or("swap requires a direction")?;
             Request::SwapPane { dir: parse_dir(d)? }
         }
+        "run" => {
+            let id = rest.first().ok_or("run requires an action id")?.clone();
+            Request::RunAction { id }
+        }
         "notify" => {
             let pane = rest.first().ok_or("notify requires a pane id")?;
             let title = rest.get(1).cloned().unwrap_or_default();

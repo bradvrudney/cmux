@@ -52,6 +52,20 @@ pub fn all_actions(shortcuts: &BTreeMap<String, String>) -> Vec<PaletteAction> {
         .collect()
 }
 
+/// User-defined actions from `cmux.json`, appended after the built-ins.
+pub fn custom_actions(
+    actions: &BTreeMap<String, cmux_config::ActionDef>,
+) -> Vec<PaletteAction> {
+    actions
+        .iter()
+        .map(|(id, def)| PaletteAction {
+            id: id.clone(),
+            label: def.label.clone().unwrap_or_else(|| id.clone()),
+            shortcut: None,
+        })
+        .collect()
+}
+
 /// Filter and rank actions against a query (case-insensitive subsequence match;
 /// empty query returns everything in registry order).
 pub fn filter_actions(query: &str, actions: &[PaletteAction]) -> Vec<PaletteAction> {

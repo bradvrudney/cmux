@@ -184,8 +184,8 @@ focused subset (~23 verbs) over a Unix socket at
 | `notifications.sound` | 🟡 (stored, not played) |
 | `keyboardShortcuts.*` (map, editable, CLI) | ✅ |
 | `shell` override (else `$SHELL`) | ✅ |
-| Custom `actions` (palette/CLI commands) | ❌ |
-| `commands` (custom CLI commands) | ❌ |
+| Custom `actions` (palette entries + `cmux run <id>`) | ✅ |
+| `commands` (custom CLI commands) | 🟡 (covered by `actions` + `cmux run`) |
 | `ui.surfaceTabBar.buttons` / plus-button behavior | ❌ |
 | `newWorkspaceCommand` | ❌ |
 | `workspaceGroups.byCwd` (color/icon/contextMenu) | ❌ |

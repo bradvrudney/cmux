@@ -129,6 +129,8 @@ pub enum Request {
     Capabilities,
     /// Flash a pane's attention ring to visually locate it (focused if `None`).
     TriggerFlash { pane: Option<PaneId> },
+    /// Run a user-defined `cmux.json` action by id.
+    RunAction { id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
