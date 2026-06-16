@@ -123,6 +123,12 @@ pub enum Request {
     },
     /// Swap the focused pane with its neighbor in `dir`.
     SwapPane { dir: Dir },
+    /// App/runtime identity (version, pid).
+    Identify,
+    /// The set of supported commands/features.
+    Capabilities,
+    /// Flash a pane's attention ring to visually locate it (focused if `None`).
+    TriggerFlash { pane: Option<PaneId> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

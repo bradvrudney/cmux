@@ -152,12 +152,11 @@ focused subset (~23 verbs) over a Unix socket at
 | `close-workspace` / `reorder-workspace` | ✅ |
 | `move-tab` / `swap <dir>` | ✅ |
 | `mark-read <id>` / `dismiss <id>` | ✅ |
-| `identify` / `capabilities` / `system.tree` | ❌ |
+| `identify` / `capabilities` / `trigger-flash` | ✅ |
 | window list/create/close/focus/`display` | ❌ |
 | `select-workspace` / next/prev/last workspace | ❌ (focus by id works) |
 | `move-surface` / `move-tab-to-new-workspace` / `split-off` | ❌ |
 | pane swap / break / join | ❌ |
-| `trigger-flash` | ❌ |
 | surface respawn / health / resume get/set/clear | ❌ |
 | workspace-group namespace | ❌ |
 | dismiss/open-notification, jump-to-unread (CLI) | ❌ |

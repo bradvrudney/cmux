@@ -119,7 +119,13 @@ fn parse(args: &[String]) -> Result<Option<Request>, String> {
 
     let req = match cmd {
         "ping" => Request::Ping,
-        "list-workspaces" | "ls" => Request::ListWorkspaces,
+        "identify" => Request::Identify,
+        "capabilities" | "caps" => Request::Capabilities,
+        "trigger-flash" | "flash" => {
+            let pane = rest.first().map(|p| parse_id(p).map(PaneId)).transpose()?;
+            Request::TriggerFlash { pane }
+        }
+        "list-workspaces" | "ls" | "tree" => Request::ListWorkspaces,
         "notifications" | "notes" => Request::ListNotifications,
         // `mark-read` with no id marks everything; with an id marks just that one.
         "mark-read" => match rest.first() {

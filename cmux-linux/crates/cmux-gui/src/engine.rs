@@ -62,6 +62,16 @@ struct Selection {
     active: (usize, usize),
 }
 
+/// Control-socket commands this build understands (for `cmux capabilities`).
+const CAPABILITIES: &[&str] = &[
+    "ping", "identify", "capabilities", "list-workspaces", "snapshot", "send",
+    "send-key", "focus", "focus-dir", "split", "close-pane", "new-tab",
+    "new-workspace", "close-workspace", "reorder-workspace", "rename-tab",
+    "rename-workspace", "reorder-tab", "move-tab", "swap", "equalize", "zoom",
+    "next-tab", "prev-tab", "trigger-flash", "resize", "find", "browser",
+    "navigate", "notify", "notifications", "mark-read", "dismiss", "config",
+];
+
 /// If a whitespace-delimited `http(s)://` URL token covers `col` in `line`,
 /// return it with trailing punctuation trimmed. Pure so it is unit-testable.
 fn url_at_col(line: &str, col: usize) -> Option<String> {
@@ -922,6 +932,24 @@ impl Engine {
                     Response::error("no pane in that direction")
                 }
             }
+            Request::Identify => Response::Snapshot {
+                text: format!(
+                    "cmux-linux {}\npid {}\nworkspaces {}\npanes {}",
+                    env!("CARGO_PKG_VERSION"),
+                    std::process::id(),
+                    self.state.workspaces.len(),
+                    self.state.panes.len(),
+                ),
+            },
+            Request::Capabilities => Response::Snapshot {
+                text: CAPABILITIES.join("\n"),
+            },
+            Request::TriggerFlash { pane } => {
+                match pane.or_else(|| self.state.focused_pane()) {
+                    Some(p) if self.state.set_ring(p, RingState::Attention) => Response::Ok,
+                    _ => Response::error("no such pane"),
+                }
+            }
         }
     }
 
@@ -1125,6 +1153,25 @@ mod tests {
         assert_eq!(e2.state.panes.len(), pane_count);
         let pane = e2.state.focused_pane().unwrap();
         assert!(e2.terminal(pane).is_some());
+    }
+
+    #[test]
+    fn request_identify_capabilities_and_flash() {
+        let mut e = engine();
+        let p = e.state.focused_pane().unwrap();
+        match e.handle_request(Request::Identify) {
+            Response::Snapshot { text } => assert!(text.contains("cmux-linux")),
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+        match e.handle_request(Request::Capabilities) {
+            Response::Snapshot { text } => assert!(text.contains("identify")),
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+        assert_eq!(
+            e.handle_request(Request::TriggerFlash { pane: Some(p) }),
+            Response::Ok
+        );
+        assert!(e.state.pane(p).unwrap().ring.is_attention());
     }
 
     #[test]
