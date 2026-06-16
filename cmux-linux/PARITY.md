@@ -41,7 +41,8 @@ tracked here but marked ⬜.
 | Configurable font size | ✅ |
 | Alt-screen tracking | 🟡 (excluded from scrollback; no mouse-reporting) |
 | OSC 7 (working directory) | ❌ |
-| OSC 8 hyperlinks + ⌘/Ctrl-click to open | ❌ |
+| Ctrl-click a URL → open in a browser pane | ✅ (detects `http(s)://` under the pointer) |
+| OSC 8 escape-sequence hyperlinks | ❌ (needs per-cell link data) |
 | OSC 133 prompt marks (shell integration) | ❌ |
 | OSC 99 (kitty notifications) | ❌ |
 | Mouse text selection (drag, multi-line) | ✅ |

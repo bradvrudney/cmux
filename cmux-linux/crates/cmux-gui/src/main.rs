@@ -929,10 +929,22 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                                     class: "grid",
                                     style: "font-size:{font}px;font-family:{family}, monospace;",
                                     onmousedown: move |evt| {
-                                        // Begin a text selection at the clicked cell. Cell
-                                        // metrics mirror the rendered font (6px grid padding,
-                                        // line-height 1.2, ~0.6em advance for monospace).
+                                        // Cell metrics mirror the rendered font (6px grid
+                                        // padding, line-height 1.2, ~0.6em monospace advance).
                                         let (row, col) = cell_at(&evt, font);
+                                        // Ctrl-click a URL opens it in a browser pane.
+                                        if evt.modifiers().ctrl() {
+                                            let url = engine().lock().unwrap().url_at(pid, row, col);
+                                            if let Some(u) = url {
+                                                engine()
+                                                    .lock()
+                                                    .unwrap()
+                                                    .open_browser(&u, Orientation::Horizontal);
+                                                tick += 1;
+                                                return;
+                                            }
+                                        }
+                                        // Otherwise begin a text selection at the clicked cell.
                                         let mut g = engine().lock().unwrap();
                                         g.state.focus_pane(pid);
                                         g.begin_selection(pid, row, col);

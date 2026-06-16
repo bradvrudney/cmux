@@ -62,6 +62,32 @@ struct Selection {
     active: (usize, usize),
 }
 
+/// If a whitespace-delimited `http(s)://` URL token covers `col` in `line`,
+/// return it with trailing punctuation trimmed. Pure so it is unit-testable.
+fn url_at_col(line: &str, col: usize) -> Option<String> {
+    let chars: Vec<char> = line.chars().collect();
+    if col >= chars.len() || chars[col].is_whitespace() {
+        return None;
+    }
+    let mut start = col;
+    while start > 0 && !chars[start - 1].is_whitespace() {
+        start -= 1;
+    }
+    let mut end = col;
+    while end < chars.len() && !chars[end].is_whitespace() {
+        end += 1;
+    }
+    let token: String = chars[start..end].iter().collect();
+    let token = token.trim_end_matches(|c: char| {
+        matches!(c, '.' | ',' | ';' | ':' | ')' | ']' | '}' | '"' | '\'' | '>')
+    });
+    if token.starts_with("http://") || token.starts_with("https://") {
+        Some(token.to_string())
+    } else {
+        None
+    }
+}
+
 impl Engine {
     /// Build an engine, restoring the saved session if one exists (otherwise
     /// seeding a fresh workspace), and spawn shells for every pane.
@@ -327,6 +353,18 @@ impl Engine {
             n.sound_name("message");
         }
         let _ = n.show();
+    }
+
+    /// If a clickable URL covers viewport cell (`row`, `col`) in `pane`, return
+    /// it. Used for ctrl-click-to-open.
+    pub fn url_at(&self, pane: PaneId, row: usize, col: usize) -> Option<String> {
+        let view = self.terminal_viewport(pane)?;
+        let line: String = view
+            .get(row)?
+            .iter()
+            .map(|c| if c.c == '\0' { ' ' } else { c.c })
+            .collect();
+        url_at_col(&line, col)
     }
 
     /// The terminal cursor `(row, col)` for `pane`, but only on the live screen
@@ -989,6 +1027,21 @@ mod tests {
         assert_eq!(e2.state.panes.len(), pane_count);
         let pane = e2.state.focused_pane().unwrap();
         assert!(e2.terminal(pane).is_some());
+    }
+
+    #[test]
+    fn url_detection_under_column() {
+        let line = "see https://example.com/path) for docs";
+        // Column inside the URL returns it (trailing ')' trimmed).
+        let u = url_at_col(line, 10).unwrap();
+        assert_eq!(u, "https://example.com/path");
+        // Column over plain words is not a URL.
+        assert!(url_at_col(line, 0).is_none());
+        assert!(url_at_col(line, 2).is_none());
+        // A space between tokens is not a URL.
+        assert!(url_at_col(line, 3).is_none());
+        // Non-http tokens are ignored.
+        assert!(url_at_col("ftp://nope.example", 4).is_none());
     }
 
     #[test]

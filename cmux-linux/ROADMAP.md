@@ -95,9 +95,12 @@ construction, not feature parity with the macOS app.
       `notifications.sound` is set. The focused terminal pane draws a cursor
       (block / bar / underline per `appearance.cursorStyle`).
 
+- [x] **Clickable URLs** — ctrl-click an `http(s)://` URL in a terminal pane to
+      open it in a browser split (URL detected under the pointer).
+
 ## Planned
 
-- [ ] OSC 8 hyperlinks with click-to-open; OSC 7 working-directory tracking.
+- [ ] OSC 8 escape-sequence hyperlinks (per-cell link data); OSC 7 cwd tracking.
 - [ ] Custom notification sound files.
 - [ ] Scriptable browser API (upstream's agent-browser port) on the browser pane.
 - [ ] Highlight find matches in-place (currently scrolls to the match line).
