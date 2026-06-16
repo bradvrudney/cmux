@@ -100,7 +100,8 @@ pub struct Appearance {
 impl Default for Appearance {
     fn default() -> Self {
         Self {
-            theme: Theme::System,
+            // cmux ships a dark UI by default, matching the macOS app.
+            theme: Theme::Dark,
             font_family: "monospace".into(),
             font_size: 13.0,
             opacity: 1.0,

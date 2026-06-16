@@ -117,6 +117,12 @@ construction, not feature parity with the macOS app.
       pane), and `newWorkspaceCommand` in `cmux.json` runs in each new
       workspace's first pane.
 
+- [x] **UI aligned with the macOS app** — dark by default on a neutral
+      near-black palette (was Catppuccin purple), a compact workspace sidebar of
+      rows (active row blue left-accent, not big pills), and a horizontal tab
+      strip above the split panes (active tab blue underline + close button),
+      matching `docs/assets/` reference screenshots. Light/system themes use a
+      neutral light palette.
 - [x] **Focus history, reopen workspace & respawn** — `ctrl+shift+←`/`→` walk
       the focus history (skipping closed panes); the command palette can reopen
       a closed workspace; `cmux respawn [pane]` kills and restarts a pane's

@@ -325,7 +325,12 @@ fn App() -> Element {
     let snap = snapshot();
 
     let sidebar = rsx! { Sidebar { snap: snap.clone(), tick, show_notifications } };
-    let main = rsx! { PaneArea { snap: snap.clone(), tick } };
+    let main = rsx! {
+        div { class: "content",
+            TabBar { snap: snap.clone(), tick }
+            PaneArea { snap: snap.clone(), tick }
+        }
+    };
 
     rsx! {
         style { {BASE_CSS} }
@@ -771,7 +776,6 @@ fn NotificationPanel(
 fn Sidebar(snap: Snapshot, tick: Signal<u64>, show_notifications: Signal<bool>) -> Element {
     let width = snap.sidebar_width;
     let mut show_notifications = show_notifications;
-    let mut drag_tab = use_signal(|| Option::<TabId>::None);
     let mut drag_ws = use_signal(|| Option::<WorkspaceId>::None);
     rsx! {
         div {
@@ -792,9 +796,9 @@ fn Sidebar(snap: Snapshot, tick: Signal<u64>, show_notifications: Signal<bool>) 
             }
             div { class: "workspaces",
                 for (idx, w) in snap.workspaces.iter().cloned().enumerate() {
-                    button {
+                    div {
                         key: "{w.id}",
-                        class: if w.active { "ws active" } else { "ws" },
+                        class: if w.active { "ws-row active" } else { "ws-row" },
                         draggable: "true",
                         onclick: move |_| {
                             engine().lock().unwrap().state.focus_workspace(w.id);
@@ -810,59 +814,83 @@ fn Sidebar(snap: Snapshot, tick: Signal<u64>, show_notifications: Signal<bool>) 
                                 tick += 1;
                             }
                         },
-                        "{w.title}"
+                        span { class: "ws-title", "{w.title}" }
                     }
                 }
-                button {
-                    class: "ws add",
+                div {
+                    class: "ws-add",
                     title: "New workspace",
                     onclick: move |_| {
                         engine().lock().unwrap().new_workspace("workspace");
                         tick += 1;
                     },
-                    "+ ws"
+                    "+ New workspace"
                 }
             }
-            div { class: "tabs",
-                for (idx, t) in snap.tabs.iter().cloned().enumerate() {
-                    div {
-                        key: "{t.id}",
-                        class: if t.active { "tab active" } else { "tab" },
-                        draggable: "true",
-                        onclick: move |_| {
+        }
+    }
+}
+
+/// The horizontal tab strip above the split panes — the active workspace's
+/// tabs, mirroring the macOS app's surface tab bar.
+#[component]
+fn TabBar(snap: Snapshot, tick: Signal<u64>) -> Element {
+    let mut drag_tab = use_signal(|| Option::<TabId>::None);
+    rsx! {
+        div { class: "tabbar",
+            for (idx, t) in snap.tabs.iter().cloned().enumerate() {
+                div {
+                    key: "{t.id}",
+                    class: if t.active { "tab active" } else { "tab" },
+                    draggable: "true",
+                    onclick: move |_| {
+                        let mut g = engine().lock().unwrap();
+                        if let Some(ws) = g.state.active_workspace {
+                            g.state.focus_tab(ws, t.id);
+                        }
+                        tick += 1;
+                    },
+                    ondragstart: move |_| drag_tab.set(Some(t.id)),
+                    ondragover: move |evt| evt.prevent_default(),
+                    ondrop: move |evt| {
+                        evt.prevent_default();
+                        if let Some(src) = drag_tab() {
                             let mut g = engine().lock().unwrap();
                             if let Some(ws) = g.state.active_workspace {
-                                g.state.focus_tab(ws, t.id);
+                                g.state.reorder_tab(ws, src, idx);
+                            }
+                            drag_tab.set(None);
+                            tick += 1;
+                        }
+                    },
+                    if t.attention {
+                        span { class: "ring-dot", "●" }
+                    }
+                    span { class: "tab-title", "{t.title}" }
+                    span {
+                        class: "tab-close",
+                        title: "Close tab",
+                        onclick: move |evt| {
+                            evt.stop_propagation();
+                            let mut g = engine().lock().unwrap();
+                            if let Some(ws) = g.state.active_workspace {
+                                g.state.close_tab(ws, t.id);
+                                g.ensure_runtimes();
                             }
                             tick += 1;
                         },
-                        ondragstart: move |_| drag_tab.set(Some(t.id)),
-                        ondragover: move |evt| evt.prevent_default(),
-                        ondrop: move |evt| {
-                            evt.prevent_default();
-                            if let Some(src) = drag_tab() {
-                                let mut g = engine().lock().unwrap();
-                                if let Some(ws) = g.state.active_workspace {
-                                    g.state.reorder_tab(ws, src, idx);
-                                }
-                                drag_tab.set(None);
-                                tick += 1;
-                            }
-                        },
-                        if t.attention {
-                            span { class: "ring-dot", "●" }
-                        }
-                        span { class: "tab-title", "{t.title}" }
+                        "✕"
                     }
                 }
-                button {
-                    class: "tab add",
-                    onclick: move |_| {
-                        engine().lock().unwrap().new_tab();
-                        tick += 1;
-                    },
-                    "+ tab"
-                }
+            }
+            div {
+                class: "tab-add",
+                title: "New tab",
+                onclick: move |_| {
+                    engine().lock().unwrap().new_tab();
+                    tick += 1;
+                },
+                "+"
             }
         }
     }
@@ -1193,31 +1221,27 @@ fn handle_shortcut(key: &str, tick: &mut Signal<u64>) -> bool {
 const BASE_CSS: &str = r#"
 * { box-sizing: border-box; }
 html, body, #main, .app { height: 100%; margin: 0; }
-.app.theme-dark {
-    --bg:#181825; --panel:#1e1e2e; --deep:#11111b; --panel2:#313244;
-    --border:#313244; --border-strong:#45475a; --text:#cdd6f4; --text-dim:#bac2de;
-    --muted:#6c7086; --accent:#4c71f2; --on-accent:#ffffff;
-    --term-fg:#cdd6f4; --term-bg:#1e1e2e; --overlay:rgba(0,0,0,0.4); --sel-bg:#45475a;
+/* Neutral near-black dark palette, matching the macOS cmux app. */
+.app.theme-dark, .app.theme-system {
+    --bg:#191919; --panel:#1e1e1e; --deep:#141414; --panel2:#2a2a2a;
+    --border:#2c2c2c; --border-strong:#3a3a3a; --text:#dcdcdc; --text-dim:#a6a6a6;
+    --muted:#6e6e6e; --accent:#4c71f2; --on-accent:#ffffff;
+    --term-fg:#dcdcdc; --term-bg:#191919; --overlay:rgba(0,0,0,0.5); --sel-bg:#33406b;
 }
 .app.theme-light {
-    --bg:#eff1f5; --panel:#e6e9ef; --deep:#dce0e8; --panel2:#ccd0da;
-    --border:#ccd0da; --border-strong:#bcc0cc; --text:#4c4f69; --text-dim:#5c5f77;
-    --muted:#8c8fa1; --accent:#1e66f5; --on-accent:#ffffff;
-    --term-fg:#4c4f69; --term-bg:#eff1f5; --overlay:rgba(60,60,80,0.35); --sel-bg:#acb0be;
+    --bg:#f5f5f6; --panel:#ededee; --deep:#e3e3e5; --panel2:#dddde0;
+    --border:#dadadc; --border-strong:#c6c6c9; --text:#1f1f22; --text-dim:#55555b;
+    --muted:#8a8a90; --accent:#3257e0; --on-accent:#ffffff;
+    --term-fg:#1f1f22; --term-bg:#f5f5f6; --overlay:rgba(40,40,45,0.4); --sel-bg:#b9c4ef;
 }
-/* "system" theme: dark by default, light when the OS prefers light. */
-.app.theme-system {
-    --bg:#181825; --panel:#1e1e2e; --deep:#11111b; --panel2:#313244;
-    --border:#313244; --border-strong:#45475a; --text:#cdd6f4; --text-dim:#bac2de;
-    --muted:#6c7086; --accent:#4c71f2; --on-accent:#ffffff;
-    --term-fg:#cdd6f4; --term-bg:#1e1e2e; --overlay:rgba(0,0,0,0.4); --sel-bg:#45475a;
-}
+/* "system" theme follows the OS: it defaults dark (above) and flips to a
+   neutral light when the desktop prefers light. */
 @media (prefers-color-scheme: light) {
     .app.theme-system {
-        --bg:#eff1f5; --panel:#e6e9ef; --deep:#dce0e8; --panel2:#ccd0da;
-        --border:#ccd0da; --border-strong:#bcc0cc; --text:#4c4f69; --text-dim:#5c5f77;
-        --muted:#8c8fa1; --accent:#1e66f5; --on-accent:#ffffff;
-        --term-fg:#4c4f69; --term-bg:#eff1f5; --overlay:rgba(60,60,80,0.35); --sel-bg:#acb0be;
+        --bg:#f5f5f6; --panel:#ededee; --deep:#e3e3e5; --panel2:#dddde0;
+        --border:#dadadc; --border-strong:#c6c6c9; --text:#1f1f22; --text-dim:#55555b;
+        --muted:#8a8a90; --accent:#3257e0; --on-accent:#ffffff;
+        --term-fg:#1f1f22; --term-bg:#f5f5f6; --overlay:rgba(40,40,45,0.4); --sel-bg:#b9c4ef;
     }
 }
 /* Background-opacity model: siblings (.sidebar, .pane-area>.pane) are tinted
@@ -1235,31 +1259,57 @@ html, body, #main, .app { height: 100%; margin: 0; }
 }
 .sidebar-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 12px; font-weight: 600; border-bottom: 1px solid var(--border);
+    padding: 9px 12px; font-weight: 600; font-size: 13px;
+    border-bottom: 1px solid var(--border);
 }
-.logo { color: var(--accent); }
+.logo { color: var(--accent); letter-spacing: 0.2px; }
 .unread {
     background: var(--accent); color: var(--on-accent); border-radius: 10px;
     padding: 1px 7px; font-size: 11px;
 }
-.workspaces { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px; }
-.ws {
-    background: var(--panel2); color: var(--text); border: none; border-radius: 6px;
-    padding: 4px 8px; font-size: 12px; cursor: pointer;
+/* Workspaces: a compact vertical list of rows (cmux's "vertical tabs"). */
+.workspaces { display: flex; flex-direction: column; gap: 1px; padding: 6px; }
+.ws-row {
+    display: flex; align-items: center; padding: 6px 9px; border-radius: 6px;
+    cursor: pointer; font-size: 13px; color: var(--text-dim);
+    border-left: 2px solid transparent;
 }
-.ws.active { background: var(--accent); color: var(--on-accent); }
-.ws.add, .tab.add { background: transparent; border: 1px dashed var(--border-strong); color: var(--muted); }
-.tabs { display: flex; flex-direction: column; gap: 2px; padding: 8px; }
+.ws-row:hover { background: var(--panel2); }
+.ws-row.active { background: var(--panel2); color: var(--text); border-left-color: var(--accent); }
+.ws-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-add {
+    padding: 6px 9px; font-size: 12px; color: var(--muted);
+    cursor: pointer; border-radius: 6px;
+}
+.ws-add:hover { background: var(--panel2); color: var(--text-dim); }
+/* Content column: the horizontal tab strip above the split panes. */
+.content { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
+.tabbar {
+    display: flex; align-items: stretch; min-height: 33px; overflow-x: auto;
+    background: color-mix(in srgb, var(--panel) calc(var(--term-opacity, 1) * 100%), transparent);
+    border-bottom: 1px solid var(--border);
+}
 .tab {
-    display: flex; align-items: center; gap: 6px; padding: 8px 10px;
-    border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text-dim);
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px 6px 12px;
+    cursor: pointer; font-size: 13px; color: var(--text-dim);
+    border-right: 1px solid var(--border); max-width: 220px; flex: 0 0 auto;
 }
 .tab:hover { background: var(--panel2); }
-.tab.active { background: var(--panel2); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
-.ring-dot { color: var(--accent); font-size: 10px; }
+.tab.active {
+    background: color-mix(in srgb, var(--term-bg) calc(var(--term-opacity, 1) * 100%), transparent);
+    color: var(--text); box-shadow: inset 0 -2px 0 var(--accent);
+}
+.ring-dot { color: var(--accent); font-size: 9px; }
 .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tab.add { justify-content: center; cursor: pointer; }
-.pane-area { position: relative; flex: 1 1 auto; background: transparent; }
+.tab-close { color: var(--muted); font-size: 11px; opacity: 0; padding: 0 2px; border-radius: 3px; }
+.tab:hover .tab-close, .tab.active .tab-close { opacity: 1; }
+.tab-close:hover { color: var(--text); background: var(--border-strong); }
+.tab-add {
+    display: flex; align-items: center; padding: 0 12px; color: var(--muted);
+    cursor: pointer; font-size: 16px; flex: 0 0 auto;
+}
+.tab-add:hover { color: var(--text); }
+.pane-area { position: relative; flex: 1 1 auto; min-height: 0; background: transparent; }
 .pane {
     position: absolute; overflow: hidden;
     background: color-mix(in srgb, var(--term-bg) calc(var(--term-opacity, 1) * 100%), transparent);
