@@ -50,7 +50,7 @@ tracked here but marked ⬜.
 | Rich-text / image paste, paste bracketing | ⬜ / ❌ |
 | Vim-style copy mode | ❌ |
 | Mouse reporting to TUIs (SGR/X11) | ❌ |
-| Right-click context menu (copy/open) | ❌ |
+| Right-click context menu (copy/paste/open link/split/close) | ✅ |
 | Configurable font family | 🟡 (key stored; fixed monospace stack rendered) |
 | Cursor style (block/bar/underline) | ✅ (rendered on the focused pane) |
 | Ligatures | ❌ |
@@ -187,7 +187,7 @@ focused subset (~23 verbs) over a Unix socket at
 | Custom `actions` (palette entries + `cmux run <id>`) | ✅ |
 | `commands` (custom CLI commands) | 🟡 (covered by `actions` + `cmux run`) |
 | `ui.surfaceTabBar.buttons` / plus-button behavior | ❌ |
-| `newWorkspaceCommand` | ❌ |
+| `newWorkspaceCommand` | ✅ |
 | `workspaceGroups.byCwd` (color/icon/contextMenu) | ❌ |
 | `notifications.hooks` | ❌ |
 | `vault` (agent sessions) | ⬜ |

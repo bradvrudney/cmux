@@ -141,6 +141,17 @@ struct DragInfo {
     region: cmux_core::split::Rect,
 }
 
+/// An open right-click context menu over a terminal pane.
+#[derive(Clone, PartialEq)]
+struct CtxMenu {
+    /// Viewport-relative position (client coordinates).
+    x: f64,
+    y: f64,
+    pane: PaneId,
+    /// URL under the pointer, if any (enables "Open link").
+    url: Option<String>,
+}
+
 #[derive(Clone, PartialEq, Default)]
 struct Snapshot {
     workspaces: Vec<WorkspaceView>,
@@ -871,6 +882,8 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
     let mut area_rect = use_signal(|| Option::<(f64, f64, f64, f64)>::None);
     // Pane whose terminal is currently being mouse-selected, if any.
     let mut selecting = use_signal(|| Option::<PaneId>::None);
+    // Open right-click context menu, if any.
+    let mut ctx_menu = use_signal(|| Option::<CtxMenu>::None);
     rsx! {
         div {
             class: "pane-area",
@@ -972,6 +985,18 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                                         }
                                     },
                                     onmouseup: move |_| selecting.set(None),
+                                    oncontextmenu: move |evt| {
+                                        evt.prevent_default();
+                                        let (row, col) = cell_at(&evt, font);
+                                        let c = evt.data().client_coordinates();
+                                        let url = {
+                                            let mut g = engine().lock().unwrap();
+                                            g.state.focus_pane(pid);
+                                            g.url_at(pid, row, col)
+                                        };
+                                        ctx_menu.set(Some(CtxMenu { x: c.x, y: c.y, pane: pid, url }));
+                                        tick += 1;
+                                    },
                                     onmounted: move |evt| {
                                         // Size the PTY/grid to the rendered pane using
                                         // monospace cell metrics derived from the font.
@@ -1025,6 +1050,87 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                                             }
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(m) = ctx_menu() {
+                {
+                    let pane = m.pane;
+                    let url = m.url.clone();
+                    rsx! {
+                        div {
+                            class: "ctx-backdrop",
+                            onmousedown: move |_| ctx_menu.set(None),
+                            oncontextmenu: move |e| {
+                                e.prevent_default();
+                                ctx_menu.set(None);
+                            },
+                            div {
+                                class: "ctxmenu",
+                                style: "left:{m.x}px;top:{m.y}px;",
+                                onmousedown: move |e| e.stop_propagation(),
+                                div {
+                                    class: "ctx-item",
+                                    onclick: move |_| {
+                                        let t = engine().lock().unwrap().copy_selection();
+                                        if let Some(t) = t { set_clipboard(&t); }
+                                        ctx_menu.set(None);
+                                        tick += 1;
+                                    },
+                                    "Copy"
+                                }
+                                div {
+                                    class: "ctx-item",
+                                    onclick: move |_| {
+                                        if let Some(t) = get_clipboard() {
+                                            engine().lock().unwrap().write_pane(pane, t.as_bytes());
+                                        }
+                                        ctx_menu.set(None);
+                                        tick += 1;
+                                    },
+                                    "Paste"
+                                }
+                                if let Some(u) = url.clone() {
+                                    div {
+                                        class: "ctx-item",
+                                        onclick: move |_| {
+                                            engine().lock().unwrap().open_browser(&u, Orientation::Horizontal);
+                                            ctx_menu.set(None);
+                                            tick += 1;
+                                        },
+                                        "Open link"
+                                    }
+                                }
+                                div { class: "ctx-sep" }
+                                div {
+                                    class: "ctx-item",
+                                    onclick: move |_| {
+                                        engine().lock().unwrap().split_focused(Orientation::Horizontal);
+                                        ctx_menu.set(None);
+                                        tick += 1;
+                                    },
+                                    "Split right"
+                                }
+                                div {
+                                    class: "ctx-item",
+                                    onclick: move |_| {
+                                        engine().lock().unwrap().split_focused(Orientation::Vertical);
+                                        ctx_menu.set(None);
+                                        tick += 1;
+                                    },
+                                    "Split down"
+                                }
+                                div {
+                                    class: "ctx-item",
+                                    onclick: move |_| {
+                                        engine().lock().unwrap().close_pane(pane);
+                                        ctx_menu.set(None);
+                                        tick += 1;
+                                    },
+                                    "Close pane"
                                 }
                             }
                         }
@@ -1184,6 +1290,18 @@ html, body, #main, .app { height: 100%; margin: 0; }
     padding: 6px 10px; font-size: 12px; border-bottom: 1px solid var(--border);
 }
 .browser-frame { flex: 1 1 auto; width: 100%; border: none; background: #fff; }
+.ctx-backdrop { position: fixed; inset: 0; z-index: 80; }
+.ctxmenu {
+    position: fixed; min-width: 168px; background: var(--panel);
+    border: 1px solid var(--border-strong); border-radius: 8px; padding: 4px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.ctx-item {
+    padding: 6px 12px; font-size: 13px; color: var(--text);
+    border-radius: 5px; cursor: pointer; white-space: nowrap;
+}
+.ctx-item:hover { background: var(--panel2); }
+.ctx-sep { height: 1px; background: var(--border); margin: 4px 6px; }
 .divider { position: absolute; z-index: 5; background: transparent; }
 .divider:hover { background: var(--accent); opacity: 0.5; }
 .findbar {

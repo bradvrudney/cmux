@@ -43,6 +43,9 @@ pub struct Config {
     /// runnable via `cmux run <id>`; each runs a shell command in a pane.
     #[serde(default)]
     pub actions: std::collections::BTreeMap<String, ActionDef>,
+    /// Command run in a new workspace's first pane when it is created.
+    #[serde(default)]
+    pub new_workspace_command: Option<String>,
 }
 
 impl Default for Config {
@@ -54,6 +57,7 @@ impl Default for Config {
             keyboard_shortcuts: default_shortcuts(),
             shell: None,
             actions: std::collections::BTreeMap::new(),
+            new_workspace_command: None,
         }
     }
 }

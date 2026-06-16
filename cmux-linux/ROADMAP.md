@@ -112,10 +112,16 @@ construction, not feature parity with the macOS app.
       palette and run via `cmux run <id>`, typing the command into a new tab or
       the focused pane.
 
+- [x] **Right-click context menu + newWorkspaceCommand** — terminal panes have a
+      context menu (Copy / Paste / Open link / Split right / Split down / Close
+      pane), and `newWorkspaceCommand` in `cmux.json` runs in each new
+      workspace's first pane.
+
 ## Planned
 
 - [ ] OSC 8 escape-sequence hyperlinks (per-cell link data).
 - [ ] Custom notification sound files; per-action notification hooks.
+- [ ] Scrollback persistence across restart; horizontal tab-bar layout.
 - [ ] Scriptable browser API (upstream's agent-browser port) on the browser pane.
 - [ ] Highlight find matches in-place (currently scrolls to the match line).
 

@@ -501,7 +501,23 @@ impl Engine {
 
     pub fn new_workspace(&mut self, title: &str) -> cmux_core::ids::WorkspaceId {
         let ws = self.state.new_workspace(title);
+        self.state.focus_workspace(ws);
         self.ensure_runtimes();
+        // Optionally run a configured command in the new workspace's first pane.
+        if let Some(cmd) = self.config.new_workspace_command.clone() {
+            let pane = self
+                .state
+                .workspace(ws)
+                .and_then(|w| w.active_tab())
+                .and_then(|t| t.focused);
+            if let Some(p) = pane {
+                let mut line = cmd;
+                if !line.ends_with('\n') {
+                    line.push('\n');
+                }
+                self.write_pane(p, line.as_bytes());
+            }
+        }
         ws
     }
 
