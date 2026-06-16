@@ -97,6 +97,10 @@ construction, not feature parity with the macOS app.
 
 - [x] **Clickable URLs** — ctrl-click an `http(s)://` URL in a terminal pane to
       open it in a browser split (URL detected under the pointer).
+- [x] **Layout completeness** — move a tab to a new or existing workspace
+      (`ctrl+shift+u` / `cmux move-tab`), swap the focused pane with a neighbor
+      (`cmux swap <dir>` / palette), select surface 1–9 (`alt+1`…`alt+9`), and
+      reorder workspaces by dragging them in the sidebar.
 
 ## Planned
 

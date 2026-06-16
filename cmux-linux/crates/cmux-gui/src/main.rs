@@ -760,6 +760,7 @@ fn Sidebar(snap: Snapshot, tick: Signal<u64>, show_notifications: Signal<bool>) 
     let width = snap.sidebar_width;
     let mut show_notifications = show_notifications;
     let mut drag_tab = use_signal(|| Option::<TabId>::None);
+    let mut drag_ws = use_signal(|| Option::<WorkspaceId>::None);
     rsx! {
         div {
             class: "sidebar",
@@ -778,13 +779,24 @@ fn Sidebar(snap: Snapshot, tick: Signal<u64>, show_notifications: Signal<bool>) 
                 }
             }
             div { class: "workspaces",
-                for w in snap.workspaces.iter().cloned() {
+                for (idx, w) in snap.workspaces.iter().cloned().enumerate() {
                     button {
                         key: "{w.id}",
                         class: if w.active { "ws active" } else { "ws" },
+                        draggable: "true",
                         onclick: move |_| {
                             engine().lock().unwrap().state.focus_workspace(w.id);
                             tick += 1;
+                        },
+                        ondragstart: move |_| drag_ws.set(Some(w.id)),
+                        ondragover: move |evt| evt.prevent_default(),
+                        ondrop: move |evt| {
+                            evt.prevent_default();
+                            if let Some(src) = drag_ws() {
+                                engine().lock().unwrap().state.reorder_workspace(src, idx);
+                                drag_ws.set(None);
+                                tick += 1;
+                            }
                         },
                         "{w.title}"
                     }

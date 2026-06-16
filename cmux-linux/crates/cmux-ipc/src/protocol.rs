@@ -116,6 +116,13 @@ pub enum Request {
     MarkNotificationRead { id: u64 },
     /// Remove a single notification by id.
     DismissNotification { id: u64 },
+    /// Move `tab` to `workspace`, or to a brand-new workspace when `None`.
+    MoveTab {
+        tab: TabId,
+        workspace: Option<WorkspaceId>,
+    },
+    /// Swap the focused pane with its neighbor in `dir`.
+    SwapPane { dir: Dir },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

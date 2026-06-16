@@ -43,6 +43,16 @@ pub fn default_shortcuts() -> BTreeMap<String, String> {
         ("selectWorkspace7", "ctrl+7"),
         ("selectWorkspace8", "ctrl+8"),
         ("selectWorkspace9", "ctrl+9"),
+        ("moveTabToNewWorkspace", "ctrl+shift+u"),
+        ("selectSurface1", "alt+1"),
+        ("selectSurface2", "alt+2"),
+        ("selectSurface3", "alt+3"),
+        ("selectSurface4", "alt+4"),
+        ("selectSurface5", "alt+5"),
+        ("selectSurface6", "alt+6"),
+        ("selectSurface7", "alt+7"),
+        ("selectSurface8", "alt+8"),
+        ("selectSurface9", "alt+9"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))

@@ -85,11 +85,12 @@ tracked here but marked ⬜.
 | Equalize splits | ✅ (`ctrl+shift+o`, `cmux equalize`) |
 | Zoom / maximize pane | ✅ (`ctrl+shift+m`, `cmux zoom`) |
 | Select workspace by number (`ctrl+1`–`ctrl+9`) | ✅ |
-| Reorder workspaces | 🟡 (`cmux reorder-workspace`; no sidebar drag yet) |
-| Select surface by number | ❌ |
-| Move tab/surface to another workspace | ❌ |
+| Select surface by number (`alt+1`–`alt+9`) | ✅ |
+| Reorder workspaces (sidebar drag + `cmux reorder-workspace`) | ✅ |
+| Move tab to new / existing workspace | ✅ (`ctrl+shift+u`, `cmux move-tab`) |
+| Swap panes by direction | ✅ (palette / `cmux swap <dir>`) |
 | Close other tabs in pane | ❌ |
-| Swap panes / break / join | ❌ |
+| Break / join panes | ❌ |
 | Swap panes / break / join | ❌ |
 | Reopen closed workspace / window | ❌ |
 | Focus history back/forward | ❌ |
@@ -149,6 +150,7 @@ focused subset (~23 verbs) over a Unix socket at
 | `equalize` / `zoom` (toggle) | ✅ |
 | `next-tab` / `prev-tab` | ✅ |
 | `close-workspace` / `reorder-workspace` | ✅ |
+| `move-tab` / `swap <dir>` | ✅ |
 | `mark-read <id>` / `dismiss <id>` | ✅ |
 | `identify` / `capabilities` / `system.tree` | ❌ |
 | window list/create/close/focus/`display` | ❌ |
@@ -256,9 +258,10 @@ cloud backend, or the web backend, and are intentionally not part of cmux-linux:
   title/notify, bell, theming, opacity, resize, **mouse selection + clipboard
   copy/paste** — ✅. Missing: OSC 8 hyperlinks, IME, copy mode.
 - **Layout/navigation:** workspaces, vertical tabs, splits, focus nav, divider
-  drag, tab reorder + cycling, equalize, zoom, close/select workspace,
-  reopen-tab, palette — ✅. Missing: move-to-workspace, workspace groups,
-  multiple windows, right sidebar.
+  drag, tab reorder + cycling, equalize, zoom, swap panes, close/select
+  workspace + reorder, move-tab-to-workspace, select surface by number,
+  reopen-tab, palette — ✅. Missing: workspace groups, multiple windows,
+  right sidebar.
 - **Notifications:** rings/badges/feed/OSC/bell/jump, per-item mark-read +
   dismiss, OS desktop notifications (D-Bus) + sound hint — ✅. Missing: hooks,
   custom sound files.

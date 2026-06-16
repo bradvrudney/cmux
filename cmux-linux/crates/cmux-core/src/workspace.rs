@@ -189,6 +189,46 @@ impl AppState {
         }
     }
 
+    /// Focus the pane at 0-based `index` (tree order) in the active tab — the
+    /// "select surface 1–9" shortcuts.
+    pub fn focus_pane_index(&mut self, index: usize) -> bool {
+        let pane = self
+            .active_workspace()
+            .and_then(|w| w.active_tab())
+            .and_then(|t| t.panes().get(index).copied());
+        match pane {
+            Some(p) => self.focus_pane(p),
+            None => false,
+        }
+    }
+
+    /// Swap the focused pane with its spatial neighbor in `dir` (positions
+    /// exchange; both panes keep running). Returns `false` if there is none.
+    pub fn swap_focused(&mut self, dir: crate::split::FocusDir) -> bool {
+        let Some(focused) = self.focused_pane() else {
+            return false;
+        };
+        let Some(ws) = self.active_workspace else {
+            return false;
+        };
+        let neighbor = self
+            .active_workspace()
+            .and_then(|w| w.active_tab())
+            .and_then(|t| t.tree.neighbor(focused, dir));
+        let Some(neighbor) = neighbor else {
+            return false;
+        };
+        let Some(tab) = self.workspace(ws).and_then(|w| w.active_tab).clone() else {
+            return false;
+        };
+        if let Some(w) = self.workspace_mut(ws) {
+            if let Some(t) = w.tabs.iter_mut().find(|t| t.id == tab) {
+                return t.tree.swap(focused, neighbor);
+            }
+        }
+        false
+    }
+
     /// Focus a pane, clearing its ring and marking its notifications read.
     pub fn focus_pane(&mut self, pane: PaneId) -> bool {
         let Some((ws, tab)) = self.locate_pane(pane) else {
@@ -438,6 +478,63 @@ impl AppState {
         let w = self.workspaces.remove(from);
         self.workspaces.insert(to, w);
         true
+    }
+
+    /// Detach `tab` (with its panes) from its current workspace into `dest`.
+    /// Refuses if it's the only tab in the source (a workspace keeps ≥1 tab),
+    /// if `dest` is the source, or if either doesn't exist.
+    pub fn move_tab_to_workspace(&mut self, tab: TabId, dest: WorkspaceId) -> bool {
+        let Some(src) = self.locate_tab_workspace(tab) else {
+            return false;
+        };
+        if src == dest || self.workspace(dest).is_none() {
+            return false;
+        }
+        if self.workspace(src).map_or(true, |w| w.tabs.len() < 2) {
+            return false;
+        }
+        let Some(t) = self.detach_tab(src, tab) else {
+            return false;
+        };
+        if let Some(w) = self.workspace_mut(dest) {
+            w.tabs.push(t);
+            w.active_tab = Some(tab);
+        }
+        self.active_workspace = Some(dest);
+        true
+    }
+
+    /// Detach `tab` into a brand-new workspace (keeping its title). Refuses if
+    /// it's the only tab in the source. Returns the new workspace id.
+    pub fn move_tab_to_new_workspace(&mut self, tab: TabId) -> Option<WorkspaceId> {
+        let src = self.locate_tab_workspace(tab)?;
+        if self.workspace(src).map_or(true, |w| w.tabs.len() < 2) {
+            return None;
+        }
+        let t = self.detach_tab(src, tab)?;
+        let title = t.title.clone();
+        let ws_id = self.ids.workspace();
+        self.workspaces.push(Workspace {
+            id: ws_id,
+            title,
+            cwd: None,
+            tabs: vec![t],
+            active_tab: Some(tab),
+        });
+        self.active_workspace = Some(ws_id);
+        Some(ws_id)
+    }
+
+    /// Remove `tab` from `ws`, re-pointing the workspace's active tab. The
+    /// tab's panes stay in `self.panes` (they move with the tab).
+    fn detach_tab(&mut self, ws: WorkspaceId, tab: TabId) -> Option<Tab> {
+        let w = self.workspace_mut(ws)?;
+        let idx = w.tabs.iter().position(|t| t.id == tab)?;
+        let removed = w.tabs.remove(idx);
+        if w.active_tab == Some(tab) {
+            w.active_tab = w.tabs.first().map(|t| t.id);
+        }
+        Some(removed)
     }
 
     /// Move a tab to a new index within its workspace.
@@ -782,6 +879,57 @@ mod tests {
         assert!(s.pane(p1).is_none());
         assert_eq!(s.active_workspace, Some(ws2));
         assert!(!s.close_workspace(WorkspaceId(999)));
+    }
+
+    #[test]
+    fn move_tab_to_new_workspace_detaches_it() {
+        let (mut s, ws) = seeded();
+        let t1 = s.workspace(ws).unwrap().tabs[0].id;
+        let t2 = s.add_tab(ws).unwrap();
+        // Moving needs >1 tab; moving t2 leaves t1 behind in a new workspace.
+        let new_ws = s.move_tab_to_new_workspace(t2).unwrap();
+        assert_ne!(new_ws, ws);
+        assert_eq!(s.workspace(ws).unwrap().tabs.len(), 1);
+        assert_eq!(s.workspace(ws).unwrap().tabs[0].id, t1);
+        assert_eq!(s.workspace(new_ws).unwrap().tabs.len(), 1);
+        assert_eq!(s.workspace(new_ws).unwrap().active_tab, Some(t2));
+        assert_eq!(s.active_workspace, Some(new_ws));
+        // The lone remaining tab can't be moved out (workspace keeps ≥1 tab).
+        assert!(s.move_tab_to_new_workspace(t1).is_none());
+    }
+
+    #[test]
+    fn move_tab_to_existing_workspace() {
+        let (mut s, ws1) = seeded();
+        let extra = s.add_tab(ws1).unwrap();
+        let ws2 = s.new_workspace("dest");
+        assert!(s.move_tab_to_workspace(extra, ws2));
+        assert!(s.workspace(ws1).unwrap().tabs.iter().all(|t| t.id != extra));
+        assert!(s.workspace(ws2).unwrap().tabs.iter().any(|t| t.id == extra));
+        assert!(!s.move_tab_to_workspace(extra, WorkspaceId(999)));
+    }
+
+    #[test]
+    fn swap_focused_exchanges_panes() {
+        let (mut s, _ws) = seeded();
+        let left = s.focused_pane().unwrap();
+        let right = s.split_focused(Orientation::Horizontal).unwrap();
+        // Focus is on `right`; swap it left so order becomes right,left.
+        assert!(s.swap_focused(FocusDir::Left));
+        let tab = s.active_workspace().unwrap().active_tab().unwrap();
+        assert_eq!(tab.tree.leaves(), vec![right, left]);
+    }
+
+    #[test]
+    fn focus_pane_index_selects_nth() {
+        let (mut s, _ws) = seeded();
+        let first = s.focused_pane().unwrap();
+        let second = s.split_focused(Orientation::Horizontal).unwrap();
+        assert!(s.focus_pane_index(0));
+        assert_eq!(s.focused_pane(), Some(first));
+        assert!(s.focus_pane_index(1));
+        assert_eq!(s.focused_pane(), Some(second));
+        assert!(!s.focus_pane_index(9));
     }
 
     #[test]

@@ -280,6 +280,21 @@ fn parse(args: &[String]) -> Result<Option<Request>, String> {
         "zoom" => Request::ToggleZoom,
         "next-tab" => Request::NextTab,
         "prev-tab" => Request::PrevTab,
+        "move-tab" => {
+            let tab = rest.first().ok_or("move-tab requires a tab id")?;
+            let workspace = rest
+                .get(1)
+                .map(|w| parse_id(w).map(WorkspaceId))
+                .transpose()?;
+            Request::MoveTab {
+                tab: TabId(parse_id(tab)?),
+                workspace,
+            }
+        }
+        "swap" => {
+            let d = rest.first().ok_or("swap requires a direction")?;
+            Request::SwapPane { dir: parse_dir(d)? }
+        }
         "notify" => {
             let pane = rest.first().ok_or("notify requires a pane id")?;
             let title = rest.get(1).cloned().unwrap_or_default();

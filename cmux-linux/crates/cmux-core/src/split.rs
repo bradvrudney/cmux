@@ -282,6 +282,36 @@ impl SplitTree {
         false
     }
 
+    /// Swap two leaf panes in place: the tree shape is unchanged, the two panes
+    /// exchange positions. Returns `false` unless both leaves exist and differ.
+    pub fn swap(&mut self, a: PaneId, b: PaneId) -> bool {
+        if a == b || !self.contains(a) || !self.contains(b) {
+            return false;
+        }
+        if let Some(root) = &mut self.root {
+            Self::swap_node(root, a, b);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn swap_node(node: &mut Node, a: PaneId, b: PaneId) {
+        match node {
+            Node::Leaf(p) => {
+                if *p == a {
+                    *p = b;
+                } else if *p == b {
+                    *p = a;
+                }
+            }
+            Node::Split { first, second, .. } => {
+                Self::swap_node(first, a, b);
+                Self::swap_node(second, a, b);
+            }
+        }
+    }
+
     /// Reset every split's divider to an even 0.5 ratio (upstream "equalize
     /// splits"). Leaves are unaffected.
     pub fn equalize(&mut self) {
@@ -560,6 +590,17 @@ mod tests {
         t.set_ratio_by_index(0, 5.0);
         let d = t.dividers(Rect::new(0.0, 0.0, 1.0, 1.0));
         assert_eq!(d[0].ratio, 0.95);
+    }
+
+    #[test]
+    fn swap_exchanges_two_leaves() {
+        let mut t = SplitTree::single(PaneId(1));
+        t.split(PaneId(1), PaneId(2), Orientation::Horizontal, false);
+        assert_eq!(t.leaves(), vec![PaneId(1), PaneId(2)]);
+        assert!(t.swap(PaneId(1), PaneId(2)));
+        assert_eq!(t.leaves(), vec![PaneId(2), PaneId(1)]);
+        assert!(!t.swap(PaneId(1), PaneId(1)));
+        assert!(!t.swap(PaneId(1), PaneId(99)));
     }
 
     #[test]

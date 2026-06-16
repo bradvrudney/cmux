@@ -553,13 +553,35 @@ impl Engine {
             "equalizeSplits" => self.state.equalize_active(),
             "toggleZoom" => self.state.toggle_zoom(),
             "closeWorkspace" => self.close_active_workspace(),
-            // `selectWorkspaceN` focuses the N-th workspace (1-based) in the
-            // sidebar — the rebindable ⌘1–9 family in upstream cmux.
-            other => other
-                .strip_prefix("selectWorkspace")
-                .and_then(|n| n.parse::<usize>().ok())
-                .filter(|n| *n >= 1)
-                .map_or(false, |n| self.state.focus_workspace_index(n - 1)),
+            "swapLeft" => self.state.swap_focused(FocusDir::Left),
+            "swapRight" => self.state.swap_focused(FocusDir::Right),
+            "swapUp" => self.state.swap_focused(FocusDir::Up),
+            "swapDown" => self.state.swap_focused(FocusDir::Down),
+            "moveTabToNewWorkspace" => {
+                match self.state.active_workspace().and_then(|w| w.active_tab) {
+                    Some(t) => self.state.move_tab_to_new_workspace(t).is_some(),
+                    None => false,
+                }
+            }
+            // `selectWorkspaceN` / `selectSurfaceN` focus the N-th (1-based)
+            // workspace / pane — the rebindable ⌘1–9 / ⌃1–9 families upstream.
+            other => {
+                if let Some(n) = other
+                    .strip_prefix("selectWorkspace")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .filter(|n| *n >= 1)
+                {
+                    self.state.focus_workspace_index(n - 1)
+                } else if let Some(n) = other
+                    .strip_prefix("selectSurface")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .filter(|n| *n >= 1)
+                {
+                    self.state.focus_pane_index(n - 1)
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -822,6 +844,30 @@ impl Engine {
                     Response::Ok
                 } else {
                     Response::error("no such notification")
+                }
+            }
+            Request::MoveTab { tab, workspace } => {
+                let ok = match workspace {
+                    Some(ws) => self.state.move_tab_to_workspace(tab, ws),
+                    None => self.state.move_tab_to_new_workspace(tab).is_some(),
+                };
+                if ok {
+                    Response::Ok
+                } else {
+                    Response::error("could not move tab")
+                }
+            }
+            Request::SwapPane { dir } => {
+                let d = match dir {
+                    Dir::Left => FocusDir::Left,
+                    Dir::Right => FocusDir::Right,
+                    Dir::Up => FocusDir::Up,
+                    Dir::Down => FocusDir::Down,
+                };
+                if self.state.swap_focused(d) {
+                    Response::Ok
+                } else {
+                    Response::error("no pane in that direction")
                 }
             }
         }
@@ -1111,6 +1157,25 @@ mod tests {
         assert!(e.dispatch_action("selectWorkspace2"));
         assert_eq!(e.state.active_workspace, Some(ws2));
         assert!(!e.dispatch_action("selectWorkspace9"));
+    }
+
+    #[test]
+    fn dispatch_swap_move_and_select_surface() {
+        let mut e = engine();
+        let a = e.state.focused_pane().unwrap();
+        let b = e.split_focused(Orientation::Horizontal).unwrap();
+        // selectSurface1 focuses the first pane in tree order.
+        assert!(e.dispatch_action("selectSurface1"));
+        assert_eq!(e.state.focused_pane(), Some(a));
+        // swapRight exchanges it with its right neighbor.
+        assert!(e.dispatch_action("swapRight"));
+        let leaves = e.active_layout().into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+        assert_eq!(leaves, vec![b, a]);
+        // Moving a tab to a new workspace needs >1 tab in the source.
+        e.new_tab();
+        let before = e.state.workspaces.len();
+        assert!(e.dispatch_action("moveTabToNewWorkspace"));
+        assert_eq!(e.state.workspaces.len(), before + 1);
     }
 
     #[test]
