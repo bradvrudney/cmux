@@ -74,15 +74,22 @@ impl AppState {
         ws_id
     }
 
-    /// Add a new tab (one terminal pane) to a workspace and focus it.
+    /// Add a new tab (one terminal pane) to a workspace and focus it. The new
+    /// pane inherits the focused pane's working directory.
     pub fn add_tab(&mut self, ws: WorkspaceId) -> Option<TabId> {
         let pane_id = self.ids.pane();
         let tab_id = self.ids.tab();
+        let inherited_cwd = self
+            .focused_pane()
+            .and_then(|fp| self.pane(fp))
+            .and_then(|p| p.cwd.clone());
         let title = {
             let w = self.workspace_mut(ws)?;
             (w.tabs.len() + 1).to_string()
         };
-        self.panes.insert(pane_id, Pane::terminal(pane_id));
+        let mut pane = Pane::terminal(pane_id);
+        pane.cwd = inherited_cwd;
+        self.panes.insert(pane_id, pane);
         let w = self.workspace_mut(ws)?;
         w.tabs.push(Tab::new(tab_id, title, pane_id));
         w.active_tab = Some(tab_id);
@@ -285,7 +292,11 @@ impl AppState {
             ok
         };
         if ok {
-            self.panes.insert(new_pane, Pane::terminal(new_pane));
+            // The new pane opens in the same directory as the one it split from.
+            let inherited_cwd = self.pane(target).and_then(|p| p.cwd.clone());
+            let mut pane = Pane::terminal(new_pane);
+            pane.cwd = inherited_cwd;
+            self.panes.insert(new_pane, pane);
             Some(new_pane)
         } else {
             None
@@ -428,6 +439,30 @@ impl AppState {
             title,
         });
         true
+    }
+
+    /// Close every tab in the active workspace except the active one. Returns
+    /// how many tabs were closed.
+    pub fn close_other_tabs(&mut self) -> usize {
+        let Some(ws) = self.active_workspace else {
+            return 0;
+        };
+        let keep = self.workspace(ws).and_then(|w| w.active_tab);
+        let others: Vec<TabId> = self
+            .workspace(ws)
+            .map(|w| {
+                w.tabs
+                    .iter()
+                    .map(|t| t.id)
+                    .filter(|id| Some(*id) != keep)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let n = others.len();
+        for t in others {
+            self.close_tab(ws, t);
+        }
+        n
     }
 
     /// Reopen the most recently closed tab (in its original workspace if it
@@ -879,6 +914,31 @@ mod tests {
         assert!(s.pane(p1).is_none());
         assert_eq!(s.active_workspace, Some(ws2));
         assert!(!s.close_workspace(WorkspaceId(999)));
+    }
+
+    #[test]
+    fn close_other_tabs_keeps_active() {
+        let (mut s, ws) = seeded();
+        s.add_tab(ws);
+        let keep = s.add_tab(ws).unwrap(); // active
+        assert_eq!(s.workspace(ws).unwrap().tabs.len(), 3);
+        assert_eq!(s.close_other_tabs(), 2);
+        assert_eq!(s.workspace(ws).unwrap().tabs.len(), 1);
+        assert_eq!(s.workspace(ws).unwrap().active_tab, Some(keep));
+    }
+
+    #[test]
+    fn cwd_inherited_on_split_and_tab() {
+        let (mut s, ws) = seeded();
+        let p = s.focused_pane().unwrap();
+        s.panes.get_mut(&p).unwrap().cwd = Some("/work".into());
+        // Split inherits the source pane's cwd.
+        let child = s.split_focused(Orientation::Horizontal).unwrap();
+        assert_eq!(s.pane(child).unwrap().cwd.as_deref(), Some("/work"));
+        // A new tab inherits the focused pane's cwd.
+        let t = s.add_tab(ws).unwrap();
+        let new_pane = s.workspace(ws).unwrap().tabs.iter().find(|x| x.id == t).unwrap().focused.unwrap();
+        assert_eq!(s.pane(new_pane).unwrap().cwd.as_deref(), Some("/work"));
     }
 
     #[test]

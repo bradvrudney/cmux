@@ -40,7 +40,7 @@ tracked here but marked ⬜.
 | Background opacity (desktop shows through) | ✅ (`color-mix`) |
 | Configurable font size | ✅ |
 | Alt-screen tracking | 🟡 (excluded from scrollback; no mouse-reporting) |
-| OSC 7 (working directory) | ❌ |
+| Working-directory tracking + new panes inherit cwd | ✅ (`/proc/<pid>/cwd`; OSC 7 also parsed) |
 | Ctrl-click a URL → open in a browser pane | ✅ (detects `http(s)://` under the pointer) |
 | OSC 8 escape-sequence hyperlinks | ❌ (needs per-cell link data) |
 | OSC 133 prompt marks (shell integration) | ❌ |
@@ -89,7 +89,7 @@ tracked here but marked ⬜.
 | Reorder workspaces (sidebar drag + `cmux reorder-workspace`) | ✅ |
 | Move tab to new / existing workspace | ✅ (`ctrl+shift+u`, `cmux move-tab`) |
 | Swap panes by direction | ✅ (palette / `cmux swap <dir>`) |
-| Close other tabs in pane | ❌ |
+| Close other tabs (in workspace) | ✅ (palette) |
 | Break / join panes | ❌ |
 | Swap panes / break / join | ❌ |
 | Reopen closed workspace / window | ❌ |

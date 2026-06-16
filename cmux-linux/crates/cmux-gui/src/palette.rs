@@ -23,6 +23,7 @@ pub fn all_actions(shortcuts: &BTreeMap<String, String>) -> Vec<PaletteAction> {
         ("closePane", "Close pane"),
         ("newTab", "New tab"),
         ("closeTab", "Close tab"),
+        ("closeOtherTabs", "Close other tabs"),
         ("nextTab", "Next tab"),
         ("previousTab", "Previous tab"),
         ("reopenClosedTab", "Reopen closed tab"),

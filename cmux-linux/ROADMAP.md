@@ -102,9 +102,14 @@ construction, not feature parity with the macOS app.
       (`cmux swap <dir>` / palette), select surface 1–9 (`alt+1`…`alt+9`), and
       reorder workspaces by dragging them in the sidebar.
 
+- [x] **Working-directory inheritance** — splitting a pane or opening a new tab
+      starts the shell in the source pane's current directory, read live from
+      `/proc/<pid>/cwd` (OSC 7 is also parsed when a shell emits it). Plus
+      "close other tabs" in the command palette.
+
 ## Planned
 
-- [ ] OSC 8 escape-sequence hyperlinks (per-cell link data); OSC 7 cwd tracking.
+- [ ] OSC 8 escape-sequence hyperlinks (per-cell link data).
 - [ ] Custom notification sound files.
 - [ ] Scriptable browser API (upstream's agent-browser port) on the browser pane.
 - [ ] Highlight find matches in-place (currently scrolls to the match line).

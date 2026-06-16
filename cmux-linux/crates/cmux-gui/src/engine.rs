@@ -168,7 +168,8 @@ impl Engine {
             if self.state.pane(pane).map_or(false, |p| p.is_browser()) {
                 continue;
             }
-            if let Some(rt) = self.spawn_runtime() {
+            let cwd = self.state.pane(pane).and_then(|p| p.cwd.clone());
+            if let Some(rt) = self.spawn_runtime(cwd.as_deref()) {
                 self.runtimes.insert(pane, rt);
             }
         }
@@ -181,10 +182,13 @@ impl Engine {
         }
     }
 
-    fn spawn_runtime(&self) -> Option<PaneRuntime> {
+    fn spawn_runtime(&self, cwd: Option<&str>) -> Option<PaneRuntime> {
         let mut cfg = PtyConfig::shell().with_size(DEFAULT_ROWS, DEFAULT_COLS);
         if let Some(shell) = &self.config.shell {
             cfg = PtyConfig::command([shell.clone()]).with_size(DEFAULT_ROWS, DEFAULT_COLS);
+        }
+        if let Some(dir) = cwd {
+            cfg = cfg.with_cwd(dir);
         }
         let mut pty = match PtySession::spawn(cfg) {
             Ok(p) => p,
@@ -211,6 +215,8 @@ impl Engine {
         let mut osc_notifs: Vec<(PaneId, String, String)> = Vec::new();
         // (pane, new title) from OSC 0/1/2.
         let mut titles: Vec<(PaneId, String)> = Vec::new();
+        // (pane, cwd) from OSC 7.
+        let mut cwds: Vec<(PaneId, String)> = Vec::new();
         for pane in panes {
             if let Some(rt) = self.runtimes.get_mut(&pane) {
                 while let Ok(evt) = rt.rx.try_recv() {
@@ -230,6 +236,9 @@ impl Engine {
                 if let Some(title) = rt.term.take_title() {
                     titles.push((pane, title));
                 }
+                if let Some(cwd) = rt.term.take_cwd() {
+                    cwds.push((pane, cwd));
+                }
                 for (t, b) in rt.term.take_notifications() {
                     osc_notifs.push((pane, t, b));
                 }
@@ -241,6 +250,12 @@ impl Engine {
                 if !title.is_empty() {
                     p.title = title;
                 }
+            }
+        }
+        // Track each pane's working directory (OSC 7) so new splits/tabs inherit it.
+        for (pane, cwd) in cwds {
+            if let Some(p) = self.state.panes.get_mut(&pane) {
+                p.cwd = Some(cwd);
             }
         }
         let now = Self::now_ms();
@@ -437,7 +452,28 @@ impl Engine {
 
     // ---- topology operations (shared by GUI and socket) -----------------
 
+    /// The live working directory of a pane's shell, read from `/proc/<pid>/cwd`
+    /// (Linux). More reliable than OSC 7, which a non-login shell may not emit.
+    fn proc_cwd(&self, pane: PaneId) -> Option<String> {
+        let pid = self.runtimes.get(&pane)?.pty.process_id()?;
+        let link = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
+        Some(link.to_string_lossy().into_owned())
+    }
+
+    /// Refresh a pane's recorded cwd from its live shell, so a split/new-tab
+    /// spawned from it inherits the current directory.
+    fn refresh_cwd(&mut self, pane: PaneId) {
+        if let Some(dir) = self.proc_cwd(pane) {
+            if let Some(p) = self.state.panes.get_mut(&pane) {
+                p.cwd = Some(dir);
+            }
+        }
+    }
+
     pub fn split_focused(&mut self, orientation: Orientation) -> Option<PaneId> {
+        if let Some(f) = self.state.focused_pane() {
+            self.refresh_cwd(f);
+        }
         let new = self.state.split_focused(orientation);
         self.ensure_runtimes();
         new
@@ -445,6 +481,9 @@ impl Engine {
 
     pub fn new_tab(&mut self) -> Option<cmux_core::ids::TabId> {
         let ws = self.state.active_workspace?;
+        if let Some(f) = self.state.focused_pane() {
+            self.refresh_cwd(f);
+        }
         let t = self.state.add_tab(ws);
         self.ensure_runtimes();
         t
@@ -516,6 +555,12 @@ impl Engine {
         ok
     }
 
+    fn close_other_tabs(&mut self) -> bool {
+        let n = self.state.close_other_tabs();
+        self.ensure_runtimes();
+        n > 0
+    }
+
     /// Focus the pane of the most recent unread notification ("jump to latest").
     fn focus_latest_unread(&mut self) -> bool {
         match self.state.notifications.latest_unread().map(|n| n.pane) {
@@ -547,6 +592,7 @@ impl Engine {
             "focusUp" => self.state.focus_dir(FocusDir::Up),
             "focusDown" => self.state.focus_dir(FocusDir::Down),
             "reopenClosedTab" => self.reopen_closed_tab(),
+            "closeOtherTabs" => self.close_other_tabs(),
             "jumpToLatestNotification" => self.focus_latest_unread(),
             "nextTab" => self.state.focus_adjacent_tab(true),
             "previousTab" => self.state.focus_adjacent_tab(false),
@@ -662,6 +708,9 @@ impl Engine {
             }
             Request::NewTab { workspace } => {
                 let ws = workspace.or_else(|| self.state.active_workspace.map(|w| w));
+                if let Some(f) = self.state.focused_pane() {
+                    self.refresh_cwd(f);
+                }
                 match ws.and_then(|w| {
                     let t = self.state.add_tab(w);
                     self.ensure_runtimes();
@@ -677,6 +726,9 @@ impl Engine {
             }
             Request::Split { pane, orientation } => {
                 let target = pane.or_else(|| self.state.focused_pane());
+                if let Some(t) = target {
+                    self.refresh_cwd(t);
+                }
                 match target.and_then(|p| {
                     let n = self.state.split_pane(p, orientation.into());
                     self.ensure_runtimes();
