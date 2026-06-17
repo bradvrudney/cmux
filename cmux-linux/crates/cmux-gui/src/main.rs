@@ -115,6 +115,10 @@ struct WorkspaceView {
     id: WorkspaceId,
     title: String,
     active: bool,
+    /// Active pane's working directory (home-shortened), for the sidebar.
+    dir: Option<String>,
+    /// Active pane's git branch, if in a repo.
+    branch: Option<String>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -176,10 +180,15 @@ fn snapshot() -> Snapshot {
         .state
         .workspaces
         .iter()
-        .map(|w| WorkspaceView {
-            id: w.id,
-            title: w.title.clone(),
-            active: Some(w.id) == active_ws,
+        .map(|w| {
+            let meta = e.workspace_meta(w.id);
+            WorkspaceView {
+                id: w.id,
+                title: w.title.clone(),
+                active: Some(w.id) == active_ws,
+                dir: meta.dir,
+                branch: meta.branch,
+            }
         })
         .collect();
 
@@ -815,6 +824,16 @@ fn Sidebar(snap: Snapshot, tick: Signal<u64>, show_notifications: Signal<bool>) 
                             }
                         },
                         span { class: "ws-title", "{w.title}" }
+                        if w.dir.is_some() || w.branch.is_some() {
+                            div { class: "ws-meta",
+                                if let Some(dir) = w.dir.clone() {
+                                    span { class: "ws-dir", "{dir}" }
+                                }
+                                if let Some(branch) = w.branch.clone() {
+                                    span { class: "ws-branch", "⎇ {branch}" }
+                                }
+                            }
+                        }
                     }
                 }
                 div {
@@ -1270,13 +1289,19 @@ html, body, #main, .app { height: 100%; margin: 0; }
 /* Workspaces: a compact vertical list of rows (cmux's "vertical tabs"). */
 .workspaces { display: flex; flex-direction: column; gap: 1px; padding: 6px; }
 .ws-row {
-    display: flex; align-items: center; padding: 6px 9px; border-radius: 6px;
-    cursor: pointer; font-size: 13px; color: var(--text-dim);
-    border-left: 2px solid transparent;
+    display: flex; flex-direction: column; gap: 2px; padding: 6px 9px;
+    border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text-dim);
+    border-left: 2px solid transparent; overflow: hidden;
 }
 .ws-row:hover { background: var(--panel2); }
 .ws-row.active { background: var(--panel2); color: var(--text); border-left-color: var(--accent); }
 .ws-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-meta {
+    display: flex; gap: 8px; font-size: 11px; color: var(--muted);
+    overflow: hidden; white-space: nowrap;
+}
+.ws-dir { overflow: hidden; text-overflow: ellipsis; }
+.ws-branch { color: var(--accent); flex: 0 0 auto; opacity: 0.85; }
 .ws-add {
     padding: 6px 9px; font-size: 12px; color: var(--muted);
     cursor: pointer; border-radius: 6px;

@@ -117,6 +117,10 @@ construction, not feature parity with the macOS app.
       pane), and `newWorkspaceCommand` in `cmux.json` runs in each new
       workspace's first pane.
 
+- [x] **Sidebar workspace metadata** — each workspace row shows a dimmed second
+      line with its active pane's working directory (home-shortened) and git
+      branch (read from `.git/HEAD`, walking up to the repo root; no `git`
+      subprocess), refreshed ~once a second off the render path.
 - [x] **UI aligned with the macOS app** — dark by default on a neutral
       near-black palette (was Catppuccin purple), a compact workspace sidebar of
       rows (active row blue left-accent, not big pills), and a horizontal tab

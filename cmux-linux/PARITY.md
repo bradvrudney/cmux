@@ -68,6 +68,7 @@ tracked here but marked ⬜.
 | Select/focus workspace (click, CLI `focus workspace:N`) | ✅ |
 | Rename workspace | ✅ (`cmux rename-workspace`) |
 | Vertical tabs (signature layout) | ✅ |
+| Sidebar workspace metadata (cwd + git branch) | ✅ |
 | New tab / new surface | ✅ |
 | Close tab | ✅ |
 | Rename tab | ✅ (`cmux rename-tab`) |

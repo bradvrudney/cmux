@@ -13,7 +13,7 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cmux_config::Config;
-use cmux_core::ids::PaneId;
+use cmux_core::ids::{PaneId, WorkspaceId};
 use cmux_core::split::{FocusDir, Orientation, Rect};
 use cmux_core::{AppState, RingState};
 use cmux_ipc::protocol::{Dir, Request, Response, Target};
@@ -52,6 +52,17 @@ pub struct Engine {
     last_save: Instant,
     /// Active mouse text selection (viewport cell coordinates), if any.
     selection: Option<Selection>,
+    /// Per-workspace sidebar metadata (cwd + git branch), refreshed off the
+    /// render path so `snapshot()` reads it without doing I/O.
+    meta_cache: HashMap<WorkspaceId, WorkspaceMeta>,
+    last_meta_refresh: Instant,
+}
+
+/// Sidebar metadata for a workspace: its active pane's directory and branch.
+#[derive(Clone, Default)]
+pub struct WorkspaceMeta {
+    pub dir: Option<String>,
+    pub branch: Option<String>,
 }
 
 /// An in-progress / completed text selection over a pane's viewport.
@@ -71,6 +82,54 @@ const CAPABILITIES: &[&str] = &[
     "next-tab", "prev-tab", "trigger-flash", "resize", "find", "browser",
     "navigate", "notify", "notifications", "mark-read", "dismiss", "config",
 ];
+
+/// The current git branch for `dir` (walking up to the repo root), read cheaply
+/// from `.git/HEAD` without a `git` subprocess. Branch name, or short SHA when
+/// detached.
+fn git_branch(dir: &str) -> Option<String> {
+    let mut p = std::path::PathBuf::from(dir);
+    loop {
+        let git = p.join(".git");
+        if git.exists() {
+            return read_git_head(&git);
+        }
+        if !p.pop() {
+            return None;
+        }
+    }
+}
+
+fn read_git_head(git: &std::path::Path) -> Option<String> {
+    let head_path = if git.is_dir() {
+        git.join("HEAD")
+    } else {
+        // Worktree/submodule: ".git" is a file `gitdir: <path>`.
+        let s = std::fs::read_to_string(git).ok()?;
+        std::path::Path::new(s.strip_prefix("gitdir:")?.trim()).join("HEAD")
+    };
+    let head = std::fs::read_to_string(head_path).ok()?;
+    let head = head.trim();
+    if let Some(r) = head.strip_prefix("ref: refs/heads/") {
+        Some(r.to_string())
+    } else if head.len() >= 7 {
+        Some(head[..7].to_string())
+    } else {
+        None
+    }
+}
+
+/// Replace a leading `$HOME` with `~` for compact display.
+fn shorten_home(dir: &str) -> String {
+    if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {
+        if dir == home {
+            return "~".to_string();
+        }
+        if let Some(rest) = dir.strip_prefix(&format!("{home}/")) {
+            return format!("~/{rest}");
+        }
+    }
+    dir.to_string()
+}
 
 /// If a whitespace-delimited `http(s)://` URL token covers `col` in `line`,
 /// return it with trailing punctuation trimmed. Pure so it is unit-testable.
@@ -127,6 +186,10 @@ impl Engine {
             config_path: None,
             last_save: Instant::now(),
             selection: None,
+            meta_cache: HashMap::new(),
+            last_meta_refresh: Instant::now()
+                .checked_sub(Duration::from_secs(10))
+                .unwrap_or_else(Instant::now),
         };
         engine.ensure_runtimes();
         engine
@@ -292,7 +355,36 @@ impl Engine {
             self.save_session();
             self.last_save = Instant::now();
         }
+        // Refresh sidebar metadata (cwd + branch) ~once a second, off the
+        // render path (snapshot() then just reads the cache).
+        if self.last_meta_refresh.elapsed() > Duration::from_millis(1000) {
+            self.refresh_workspace_meta();
+            self.last_meta_refresh = Instant::now();
+        }
         total
+    }
+
+    /// Recompute each workspace's active-pane directory and git branch.
+    fn refresh_workspace_meta(&mut self) {
+        let mut next = HashMap::new();
+        let ids: Vec<WorkspaceId> = self.state.workspaces.iter().map(|w| w.id).collect();
+        for ws in ids {
+            let pane = self
+                .state
+                .workspace(ws)
+                .and_then(|w| w.active_tab())
+                .and_then(|t| t.focused);
+            let full = pane.and_then(|p| self.proc_cwd(p));
+            let branch = full.as_deref().and_then(git_branch);
+            let dir = full.map(|d| shorten_home(&d));
+            next.insert(ws, WorkspaceMeta { dir, branch });
+        }
+        self.meta_cache = next;
+    }
+
+    /// Cached sidebar metadata for a workspace.
+    pub fn workspace_meta(&self, ws: WorkspaceId) -> WorkspaceMeta {
+        self.meta_cache.get(&ws).cloned().unwrap_or_default()
     }
 
     // ---- rendering accessors -------------------------------------------
@@ -1263,6 +1355,29 @@ mod tests {
             Response::Ok
         );
         assert!(e.state.pane(p).unwrap().ring.is_attention());
+    }
+
+    #[test]
+    fn git_branch_and_home_shortening() {
+        if let Ok(home) = std::env::var("HOME") {
+            assert_eq!(shorten_home(&home), "~");
+            assert_eq!(shorten_home(&format!("{home}/proj")), "~/proj");
+        }
+        assert_eq!(shorten_home("/etc/ssl"), "/etc/ssl");
+        // A fake repo: .git/HEAD points at a branch, and subdirs resolve up to it.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/feature-x\n").unwrap();
+        assert_eq!(
+            git_branch(dir.path().to_str().unwrap()).as_deref(),
+            Some("feature-x")
+        );
+        let sub = dir.path().join("a/b");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert_eq!(git_branch(sub.to_str().unwrap()).as_deref(), Some("feature-x"));
+        // No repo → no branch.
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(git_branch(empty.path().to_str().unwrap()), None);
     }
 
     #[test]
