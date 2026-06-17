@@ -611,6 +611,26 @@ fn SettingsPanel(tick: Signal<u64>, show_settings: Signal<bool>) -> Element {
                             onchange: move |evt| apply_config("notifications.ringOnBell", &bool_str(&evt.value()), tick),
                         }
                     }
+                    div { class: "settings-section", "Keyboard shortcuts" }
+                    for (action, chord) in cfg.keyboard_shortcuts.clone() {
+                        {
+                            // Own the path in the closure; action/chord are only
+                            // interpolated (keeps the release rsx expansion happy).
+                            let path = format!("keyboardShortcuts.{action}");
+                            rsx! {
+                                div { class: "settings-row",
+                                    span { class: "settings-label", "{action}" }
+                                    div { class: "settings-control",
+                                        input {
+                                            class: "shortcut-input",
+                                            value: "{chord}",
+                                            onchange: move |evt| apply_config(&path, &evt.value(), tick),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 div { class: "settings-foot", "Saved to ~/.config/cmux/cmux.json" }
             }
@@ -1469,4 +1489,12 @@ html, body, #main, .app { height: 100%; margin: 0; }
 }
 .settings-control input[type=checkbox] { width: 16px; height: 16px; }
 .settings-foot { padding: 10px 16px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--border); }
+.settings-section {
+    margin-top: 14px; padding: 6px 0 2px; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted);
+    border-bottom: 1px solid var(--border);
+}
+.shortcut-input {
+    font-family: monospace; font-size: 12px; width: 150px; text-align: right;
+}
 "#;

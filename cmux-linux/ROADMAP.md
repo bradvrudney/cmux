@@ -117,6 +117,9 @@ construction, not feature parity with the macOS app.
       pane), and `newWorkspaceCommand` in `cmux.json` runs in each new
       workspace's first pane.
 
+- [x] **In-app keyboard-shortcut editor** — the Settings panel gained a
+      "Keyboard shortcuts" section listing every action with an editable chord
+      field; edits apply live and persist to `cmux.json` (generic JSON-path set).
 - [x] **Sidebar workspace metadata** — each workspace row shows a dimmed second
       line with its active pane's working directory (home-shortened) and git
       branch (read from `.git/HEAD`, walking up to the repo root; no `git`
@@ -136,7 +139,7 @@ construction, not feature parity with the macOS app.
 
 - [ ] OSC 8 escape-sequence hyperlinks (per-cell link data).
 - [ ] Scrollback persistence across restart; horizontal tab-bar layout.
-- [ ] Workspace groups; in-app Settings keyboard-shortcut editor.
+- [ ] Workspace groups.
 - [ ] Custom notification sound files; per-action notification hooks.
 
 ## Out of scope on Linux (not portable / different product surface)

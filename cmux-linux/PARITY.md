@@ -203,7 +203,7 @@ focused subset (~23 verbs) over a Unix socket at
 | In-app Settings panel (`⌘,` / `ctrl+comma`) | ✅ (theme, font size, opacity, sidebar width/position, vertical tabs, notification toggles; validates + persists live) |
 | Configurable keyboard shortcuts (in `cmux.json`) | ✅ (19 default bindings) |
 | Working bound actions (split, close, new tab/ws, focus dirs, palette, find, notifications, jump-unread, reopen tab, settings) | ✅ (~17 of 19) |
-| Shortcut **editor** inside Settings UI | 🟡 (edit via `cmux.json`, no in-UI editor) |
+| Shortcut **editor** inside Settings UI | ✅ (Keyboard shortcuts section, live + persisted) |
 | `when`-context clauses / VS Code-style context keys | ❌ |
 | Global system-wide hotkey | ❌ |
 | Settings sections: Account, Mobile, Browser, Automation, Custom Sidebars, Beta, Workspace Colors… | ❌ / ⬜ |

@@ -344,6 +344,19 @@ mod tests {
     }
 
     #[test]
+    fn set_path_rebinds_a_keyboard_shortcut() {
+        // Backs the in-app Settings shortcut editor (generic JSON-path set).
+        let mut cfg = Config::default();
+        cfg.set_path("keyboardShortcuts.newTab", "ctrl+alt+t").unwrap();
+        assert_eq!(
+            cfg.keyboard_shortcuts.get("newTab").map(String::as_str),
+            Some("ctrl+alt+t")
+        );
+        // Other bindings are untouched.
+        assert!(cfg.keyboard_shortcuts.contains_key("splitHorizontal"));
+    }
+
+    #[test]
     fn custom_actions_deserialize() {
         let json = r#"{"actions":{"deploy":{"command":"make deploy","label":"Deploy","target":"currentPane"},"logs":{"command":"journalctl -f"}}}"#;
         let cfg: Config = serde_json::from_str(json).unwrap();
