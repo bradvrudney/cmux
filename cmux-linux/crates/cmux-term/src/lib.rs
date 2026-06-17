@@ -294,6 +294,8 @@ struct TermState {
     saved_alt_cursor: SavedCursor,
     /// Latest window title from OSC 0/1/2 (drained by the host).
     title: Option<String>,
+    /// Latest working directory from OSC 7 (drained by the host).
+    cwd: Option<String>,
     /// Notifications raised via OSC 9 / OSC 777 (drained by the host).
     notifications: Vec<(String, String)>,
     /// Lines that scrolled off the top of the primary screen, oldest first.
@@ -320,6 +322,7 @@ impl Terminal {
                 saved_primary: None,
                 saved_alt_cursor: SavedCursor::default(),
                 title: None,
+                cwd: None,
                 notifications: Vec::new(),
                 scrollback: VecDeque::new(),
             },
@@ -406,6 +409,11 @@ impl Terminal {
     /// Take and clear the latest title set since the last call.
     pub fn take_title(&mut self) -> Option<String> {
         self.state.title.take()
+    }
+
+    /// Take and clear the latest working directory set via OSC 7.
+    pub fn take_cwd(&mut self) -> Option<String> {
+        self.state.cwd.take()
     }
 
     /// Take and clear notifications raised via OSC 9 / OSC 777 (title, body).
@@ -880,6 +888,41 @@ fn param_or(params: &Params, default: u16) -> u16 {
     }
 }
 
+/// Extract a filesystem path from an OSC 7 `file://host/path` URI, percent-
+/// decoding `%XX` escapes. `None` for a non-file URI or empty path.
+fn cwd_from_file_uri(uri: &str) -> Option<String> {
+    let rest = uri.strip_prefix("file://")?;
+    // The path begins at the first '/' after the (optional) host.
+    let path = &rest[rest.find('/')?..];
+    let decoded = percent_decode(path);
+    if decoded.is_empty() {
+        None
+    } else {
+        Some(decoded)
+    }
+}
+
+/// Minimal `%XX` percent-decoding for OSC 7 paths.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let hi = (b[i + 1] as char).to_digit(16);
+            let lo = (b[i + 2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Read the Nth param's primary value, or `None` if absent/zero.
 fn nth_param(params: &Params, n: usize) -> Option<u16> {
     params
@@ -938,6 +981,15 @@ impl Perform for TermState {
             Some("0") | Some("1") | Some("2") => {
                 if let Some(t) = params.get(1) {
                     self.title = Some(String::from_utf8_lossy(t).into_owned());
+                }
+            }
+            // OSC 7 ; file://host/path — the shell's working directory.
+            Some("7") => {
+                if let Some(uri) = params.get(1) {
+                    let uri = String::from_utf8_lossy(uri);
+                    if let Some(path) = cwd_from_file_uri(&uri) {
+                        self.cwd = Some(path);
+                    }
                 }
             }
             // OSC 9 ; <body> — simple desktop notification (iTerm2 convention).
@@ -1203,6 +1255,17 @@ mod tests {
         t.feed("世".as_bytes());
         // 'a','b' on row 0; wide glyph wrapped to row 1 col 0.
         assert_eq!(t.cell(1, 0).c, '世');
+    }
+
+    #[test]
+    fn osc_7_sets_working_directory() {
+        let mut t = Terminal::new(3, 10);
+        t.feed(b"\x1b]7;file://host/home/me/proj%20x\x07");
+        assert_eq!(t.take_cwd().as_deref(), Some("/home/me/proj x"));
+        assert!(t.take_cwd().is_none());
+        // file:/// (empty host) also works.
+        t.feed(b"\x1b]7;file:///srv\x07");
+        assert_eq!(t.take_cwd().as_deref(), Some("/srv"));
     }
 
     #[test]

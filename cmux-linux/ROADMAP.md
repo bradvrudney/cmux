@@ -74,8 +74,80 @@ construction, not feature parity with the macOS app.
       (`ctrl+shift+f` find bar with match count and next; `cmux find <pane>
       <query>` from the CLI). Match navigation scrolls the pane to the hit.
 
-## Planned
+- [x] **Layout & control additions** — equalize splits (`ctrl+shift+o` /
+      `cmux equalize`), zoom/maximize the focused pane (`ctrl+shift+m` /
+      `cmux zoom`), next/previous tab cycling (`ctrl+tab` / `ctrl+shift+tab`,
+      `cmux next-tab`/`prev-tab`), select workspace 1–9 (`ctrl+1`…`ctrl+9`),
+      close workspace (`ctrl+shift+q` / `cmux close-workspace`), reorder
+      workspaces (`cmux reorder-workspace`), per-item notification mark-read /
+      dismiss (`cmux mark-read <id>` / `dismiss <id>`), and the configured
+      `appearance.fontFamily` is now applied to the terminal grid. All routed
+      through the shared `Engine` action path (keyboard + palette + CLI).
 
+- [x] **Terminal text selection + clipboard** — drag to select (single- and
+      multi-line, rendered with a selection tint), copy with `ctrl+shift+c` and
+      paste with `ctrl+shift+v` via the system clipboard (`arboard`, Wayland +
+      X11). Typing clears the selection, like a real terminal.
+
+- [x] **OS desktop notifications + cursor** — feed notifications (OSC 9/777,
+      bell, `cmux notify`) for non-focused panes post a freedesktop D-Bus
+      notification (`notify-rust`), with a sound-name hint when
+      `notifications.sound` is set. The focused terminal pane draws a cursor
+      (block / bar / underline per `appearance.cursorStyle`).
+
+- [x] **Clickable URLs** — ctrl-click an `http(s)://` URL in a terminal pane to
+      open it in a browser split (URL detected under the pointer).
+- [x] **Layout completeness** — move a tab to a new or existing workspace
+      (`ctrl+shift+u` / `cmux move-tab`), swap the focused pane with a neighbor
+      (`cmux swap <dir>` / palette), select surface 1–9 (`alt+1`…`alt+9`), and
+      reorder workspaces by dragging them in the sidebar.
+
+- [x] **Working-directory inheritance** — splitting a pane or opening a new tab
+      starts the shell in the source pane's current directory, read live from
+      `/proc/<pid>/cwd` (OSC 7 is also parsed when a shell emits it). Plus
+      "close other tabs" in the command palette.
+
+- [x] **Custom actions** — define `actions` in `cmux.json` (`command`, optional
+      `label`, `target: newTab | currentPane`); they appear in the command
+      palette and run via `cmux run <id>`, typing the command into a new tab or
+      the focused pane.
+
+- [x] **Right-click context menu + newWorkspaceCommand** — terminal panes have a
+      context menu (Copy / Paste / Open link / Split right / Split down / Close
+      pane), and `newWorkspaceCommand` in `cmux.json` runs in each new
+      workspace's first pane.
+
+- [x] **In-app keyboard-shortcut editor** — the Settings panel gained a
+      "Keyboard shortcuts" section listing every action with an editable chord
+      field; edits apply live and persist to `cmux.json` (generic JSON-path set).
+- [x] **Sidebar workspace metadata** — each workspace row shows a dimmed second
+      line with its active pane's working directory (home-shortened) and git
+      branch (read from `.git/HEAD`, walking up to the repo root; no `git`
+      subprocess), refreshed ~once a second off the render path.
+- [x] **UI aligned with the macOS app** — dark by default on a neutral
+      near-black palette (was Catppuccin purple), a compact workspace sidebar of
+      rows (active row blue left-accent, not big pills), and a horizontal tab
+      strip above the split panes (active tab blue underline + close button),
+      matching `docs/assets/` reference screenshots. Light/system themes use a
+      neutral light palette.
+- [x] **Focus history, reopen workspace & respawn** — `ctrl+shift+←`/`→` walk
+      the focus history (skipping closed panes); the command palette can reopen
+      a closed workspace; `cmux respawn [pane]` kills and restarts a pane's
+      shell (reusing its cwd).
+
+## Planned (deferred — larger subsystems)
+
+- [ ] OSC 8 escape-sequence hyperlinks (per-cell link data).
+- [ ] Scrollback persistence across restart; horizontal tab-bar layout.
+- [ ] Workspace groups.
+- [ ] Custom notification sound files; per-action notification hooks.
+
+## Out of scope on Linux (not portable / different product surface)
+
+See `PARITY.md` §9. In brief: multiple top-level windows, the right-sidebar
+tool panels, agent-session web renderers, the Cloud-VM control plane, the iOS
+companion app, AppleScript, the Dock tile / menu-bar extra, IME composition,
+and the Metal/Ghostty GPU renderer.
 - [ ] Scriptable browser API (upstream's agent-browser port) on the browser pane.
 - [ ] Highlight find matches in-place (currently scrolls to the match line).
 

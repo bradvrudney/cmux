@@ -12,6 +12,10 @@ pub struct Tab {
     pub tree: SplitTree,
     /// The focused pane within this tab. Kept in sync as panes open/close.
     pub focused: Option<PaneId>,
+    /// When `Some`, this pane is zoomed (maximized) over the rest of the tab.
+    /// `#[serde(default)]` keeps older `session.json` snapshots loadable.
+    #[serde(default)]
+    pub zoomed: Option<PaneId>,
 }
 
 impl Tab {
@@ -21,6 +25,7 @@ impl Tab {
             title: title.into(),
             tree: SplitTree::single(root_pane),
             focused: Some(root_pane),
+            zoomed: None,
         }
     }
 

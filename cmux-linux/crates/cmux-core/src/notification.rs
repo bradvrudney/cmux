@@ -92,6 +92,24 @@ impl NotificationFeed {
         changed
     }
 
+    /// Mark a single notification (by id) read. Returns `true` if it exists.
+    pub fn mark_read(&mut self, id: u64) -> bool {
+        match self.entries.iter_mut().find(|n| n.id == id) {
+            Some(n) => {
+                n.read = true;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Remove a single notification by id. Returns `true` if it existed.
+    pub fn dismiss(&mut self, id: u64) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|n| n.id != id);
+        self.entries.len() != before
+    }
+
     pub fn mark_all_read(&mut self) -> usize {
         let mut changed = 0;
         for n in self.entries.iter_mut().filter(|n| !n.read) {
@@ -148,6 +166,20 @@ mod tests {
         assert_eq!(feed.mark_pane_read(PaneId(3)), 1);
         assert_eq!(feed.unread_count(), 1);
         assert_eq!(feed.latest_unread().unwrap().pane, PaneId(4));
+    }
+
+    #[test]
+    fn mark_read_and_dismiss_target_one_entry() {
+        let (w, t, p) = ids();
+        let mut feed = NotificationFeed::default();
+        let a = feed.push(w, t, p, "a", "", 1);
+        let b = feed.push(w, t, p, "b", "", 2);
+        assert!(feed.mark_read(a));
+        assert_eq!(feed.unread_count(), 1);
+        assert!(!feed.mark_read(999));
+        assert!(feed.dismiss(b));
+        assert_eq!(feed.entries().len(), 1);
+        assert!(!feed.dismiss(b));
     }
 
     #[test]

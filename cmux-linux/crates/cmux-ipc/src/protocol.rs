@@ -100,6 +100,39 @@ pub enum Request {
     NavigateBrowser { pane: PaneId, url: String },
     /// Search a pane's scrollback + screen for `query`.
     Find { pane: PaneId, query: String },
+    /// Close a workspace by id.
+    CloseWorkspace { workspace: WorkspaceId },
+    /// Move a workspace to a new 0-based sidebar index.
+    ReorderWorkspace { workspace: WorkspaceId, index: usize },
+    /// Reset divider ratios of the active tab to even splits.
+    Equalize,
+    /// Toggle zoom (maximize) of the focused pane in the active tab.
+    ToggleZoom,
+    /// Focus the next tab in the active workspace (wrapping).
+    NextTab,
+    /// Focus the previous tab in the active workspace (wrapping).
+    PrevTab,
+    /// Mark a single notification (by id) read.
+    MarkNotificationRead { id: u64 },
+    /// Remove a single notification by id.
+    DismissNotification { id: u64 },
+    /// Move `tab` to `workspace`, or to a brand-new workspace when `None`.
+    MoveTab {
+        tab: TabId,
+        workspace: Option<WorkspaceId>,
+    },
+    /// Swap the focused pane with its neighbor in `dir`.
+    SwapPane { dir: Dir },
+    /// App/runtime identity (version, pid).
+    Identify,
+    /// The set of supported commands/features.
+    Capabilities,
+    /// Flash a pane's attention ring to visually locate it (focused if `None`).
+    TriggerFlash { pane: Option<PaneId> },
+    /// Run a user-defined `cmux.json` action by id.
+    RunAction { id: String },
+    /// Kill and respawn a pane's shell (focused pane if `None`).
+    Respawn { pane: Option<PaneId> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

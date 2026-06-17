@@ -21,6 +21,11 @@ cmux-ipc = { workspace = true }
 serde_json = { workspace = true }
 dioxus = { version = "0.6", features = ["desktop"] }
 tokio = { version = "1", features = ["time", "rt"] }
+# System clipboard for terminal copy/paste; wayland-data-control adds native
+# Wayland support alongside the default X11 backend.
+arboard = { version = "3", features = ["wayland-data-control"] }
+# Freedesktop (D-Bus) desktop notifications for the notification feed.
+notify-rust = "4"
 
 [dev-dependencies]
 tempfile = "3"

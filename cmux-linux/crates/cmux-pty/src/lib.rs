@@ -352,6 +352,12 @@ impl PtySession {
 
     /// Whether the child is believed to still be running.
     ///
+    /// The child process id, if still available. Used to read the live working
+    /// directory from `/proc/<pid>/cwd` on Linux.
+    pub fn process_id(&self) -> Option<u32> {
+        self.child.lock().ok().and_then(|c| c.process_id())
+    }
+
     /// This returns `false` once the child has exited and the reader thread has
     /// reaped it, or if a non-blocking poll observes the child has exited.
     pub fn is_alive(&self) -> bool {

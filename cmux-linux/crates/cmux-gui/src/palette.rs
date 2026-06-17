@@ -23,8 +23,22 @@ pub fn all_actions(shortcuts: &BTreeMap<String, String>) -> Vec<PaletteAction> {
         ("closePane", "Close pane"),
         ("newTab", "New tab"),
         ("closeTab", "Close tab"),
+        ("closeOtherTabs", "Close other tabs"),
+        ("nextTab", "Next tab"),
+        ("previousTab", "Previous tab"),
         ("reopenClosedTab", "Reopen closed tab"),
+        ("reopenClosedWorkspace", "Reopen closed workspace"),
+        ("focusBack", "Focus back"),
+        ("focusForward", "Focus forward"),
         ("newWorkspace", "New workspace"),
+        ("closeWorkspace", "Close workspace"),
+        ("moveTabToNewWorkspace", "Move tab to new workspace"),
+        ("equalizeSplits", "Equalize splits"),
+        ("toggleZoom", "Toggle pane zoom"),
+        ("swapLeft", "Swap pane left"),
+        ("swapRight", "Swap pane right"),
+        ("swapUp", "Swap pane up"),
+        ("swapDown", "Swap pane down"),
         ("focusLeft", "Focus pane left"),
         ("focusRight", "Focus pane right"),
         ("focusUp", "Focus pane up"),
@@ -37,6 +51,20 @@ pub fn all_actions(shortcuts: &BTreeMap<String, String>) -> Vec<PaletteAction> {
             id: (*id).to_string(),
             label: (*label).to_string(),
             shortcut: shortcuts.get(*id).cloned(),
+        })
+        .collect()
+}
+
+/// User-defined actions from `cmux.json`, appended after the built-ins.
+pub fn custom_actions(
+    actions: &BTreeMap<String, cmux_config::ActionDef>,
+) -> Vec<PaletteAction> {
+    actions
+        .iter()
+        .map(|(id, def)| PaletteAction {
+            id: id.clone(),
+            label: def.label.clone().unwrap_or_else(|| id.clone()),
+            shortcut: None,
         })
         .collect()
 }

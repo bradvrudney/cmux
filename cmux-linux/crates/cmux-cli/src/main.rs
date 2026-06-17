@@ -119,9 +119,27 @@ fn parse(args: &[String]) -> Result<Option<Request>, String> {
 
     let req = match cmd {
         "ping" => Request::Ping,
-        "list-workspaces" | "ls" => Request::ListWorkspaces,
+        "identify" => Request::Identify,
+        "capabilities" | "caps" => Request::Capabilities,
+        "trigger-flash" | "flash" => {
+            let pane = rest.first().map(|p| parse_id(p).map(PaneId)).transpose()?;
+            Request::TriggerFlash { pane }
+        }
+        "list-workspaces" | "ls" | "tree" => Request::ListWorkspaces,
         "notifications" | "notes" => Request::ListNotifications,
-        "mark-read" => Request::MarkAllRead,
+        // `mark-read` with no id marks everything; with an id marks just that one.
+        "mark-read" => match rest.first() {
+            Some(id) => Request::MarkNotificationRead {
+                id: id.parse::<u64>().map_err(|_| "id must be a number")?,
+            },
+            None => Request::MarkAllRead,
+        },
+        "dismiss" => {
+            let id = rest.first().ok_or("dismiss requires a notification id")?;
+            Request::DismissNotification {
+                id: id.parse::<u64>().map_err(|_| "id must be a number")?,
+            }
+        }
         "rename-tab" => {
             let tab = rest.first().ok_or("rename-tab requires a tab id")?;
             let title = rest.get(1..).map(|s| s.join(" ")).unwrap_or_default();
@@ -245,6 +263,51 @@ fn parse(args: &[String]) -> Result<Option<Request>, String> {
             Request::ClosePane {
                 pane: PaneId(parse_id(id)?),
             }
+        }
+        "close-workspace" => {
+            let id = rest.first().ok_or("close-workspace requires a workspace id")?;
+            Request::CloseWorkspace {
+                workspace: WorkspaceId(parse_id(id)?),
+            }
+        }
+        "reorder-workspace" => {
+            let id = rest.first().ok_or("reorder-workspace requires a workspace id")?;
+            let index = rest
+                .get(1)
+                .ok_or("reorder-workspace requires an index")?
+                .parse::<usize>()
+                .map_err(|_| "index must be a number")?;
+            Request::ReorderWorkspace {
+                workspace: WorkspaceId(parse_id(id)?),
+                index,
+            }
+        }
+        "equalize" => Request::Equalize,
+        "zoom" => Request::ToggleZoom,
+        "next-tab" => Request::NextTab,
+        "prev-tab" => Request::PrevTab,
+        "move-tab" => {
+            let tab = rest.first().ok_or("move-tab requires a tab id")?;
+            let workspace = rest
+                .get(1)
+                .map(|w| parse_id(w).map(WorkspaceId))
+                .transpose()?;
+            Request::MoveTab {
+                tab: TabId(parse_id(tab)?),
+                workspace,
+            }
+        }
+        "swap" => {
+            let d = rest.first().ok_or("swap requires a direction")?;
+            Request::SwapPane { dir: parse_dir(d)? }
+        }
+        "run" => {
+            let id = rest.first().ok_or("run requires an action id")?.clone();
+            Request::RunAction { id }
+        }
+        "respawn" => {
+            let pane = rest.first().map(|p| parse_id(p).map(PaneId)).transpose()?;
+            Request::Respawn { pane }
         }
         "notify" => {
             let pane = rest.first().ok_or("notify requires a pane id")?;

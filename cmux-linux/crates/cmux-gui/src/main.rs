@@ -98,6 +98,8 @@ struct PaneView {
     rows: Vec<Vec<render::StyledRun>>,
     /// `Some(url)` for a browser pane; `None` for a terminal pane.
     browser_url: Option<String>,
+    /// Terminal cursor `(row, col)` to draw (focused pane, live screen only).
+    cursor: Option<(usize, usize)>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -113,6 +115,10 @@ struct WorkspaceView {
     id: WorkspaceId,
     title: String,
     active: bool,
+    /// Active pane's working directory (home-shortened), for the sidebar.
+    dir: Option<String>,
+    /// Active pane's git branch, if in a repo.
+    branch: Option<String>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -139,6 +145,17 @@ struct DragInfo {
     region: cmux_core::split::Rect,
 }
 
+/// An open right-click context menu over a terminal pane.
+#[derive(Clone, PartialEq)]
+struct CtxMenu {
+    /// Viewport-relative position (client coordinates).
+    x: f64,
+    y: f64,
+    pane: PaneId,
+    /// URL under the pointer, if any (enables "Open link").
+    url: Option<String>,
+}
+
 #[derive(Clone, PartialEq, Default)]
 struct Snapshot {
     workspaces: Vec<WorkspaceView>,
@@ -150,6 +167,8 @@ struct Snapshot {
     sidebar_width: f32,
     sidebar_left: bool,
     font_size: f32,
+    font_family: String,
+    cursor_style: &'static str,
     theme: &'static str,
     opacity: f32,
 }
@@ -161,10 +180,15 @@ fn snapshot() -> Snapshot {
         .state
         .workspaces
         .iter()
-        .map(|w| WorkspaceView {
-            id: w.id,
-            title: w.title.clone(),
-            active: Some(w.id) == active_ws,
+        .map(|w| {
+            let meta = e.workspace_meta(w.id);
+            WorkspaceView {
+                id: w.id,
+                title: w.title.clone(),
+                active: Some(w.id) == active_ws,
+                dir: meta.dir,
+                branch: meta.branch,
+            }
         })
         .collect();
 
@@ -196,9 +220,15 @@ fn snapshot() -> Snapshot {
             alive: e.pane_alive(id),
             rows: e
                 .terminal_viewport(id)
-                .map(|v| render::viewport_to_runs(&v))
+                .map(|v| render::viewport_to_runs_sel(&v, e.selection_for(id)))
                 .unwrap_or_default(),
             browser_url: e.state.pane(id).and_then(|p| p.browser_url().map(String::from)),
+            // Only the focused terminal pane shows a cursor.
+            cursor: if Some(id) == focused {
+                e.cursor_for(id)
+            } else {
+                None
+            },
         })
         .collect();
 
@@ -235,6 +265,12 @@ fn snapshot() -> Snapshot {
         sidebar_width: e.config.sidebar.width,
         sidebar_left: e.config.sidebar.position == SidebarPosition::Left,
         font_size: e.config.appearance.font_size,
+        font_family: e.config.appearance.font_family.clone(),
+        cursor_style: match e.config.appearance.cursor_style {
+            cmux_config::CursorStyle::Block => "block",
+            cmux_config::CursorStyle::Bar => "bar",
+            cmux_config::CursorStyle::Underline => "underline",
+        },
         theme: match e.config.appearance.theme {
             cmux_config::Theme::Light => "light",
             cmux_config::Theme::Dark => "dark",
@@ -243,6 +279,31 @@ fn snapshot() -> Snapshot {
         },
         opacity: e.config.appearance.opacity.clamp(0.3, 1.0),
     }
+}
+
+/// Map a mouse event over a terminal grid to a (row, col) cell. Mirrors the
+/// rendered metrics: 6px grid padding, line-height 1.2, ~0.6em monospace advance.
+fn cell_at(evt: &Event<MouseData>, font: f32) -> (usize, usize) {
+    let p = evt.data().element_coordinates();
+    let char_w = (font as f64) * 0.6;
+    let line_h = (font as f64) * 1.2;
+    let col = ((p.x - 6.0).max(0.0) / char_w).floor() as usize;
+    let row = ((p.y - 6.0).max(0.0) / line_h).floor() as usize;
+    (row, col)
+}
+
+/// Put text on the system clipboard (best-effort).
+fn set_clipboard(text: &str) {
+    if let Ok(mut cb) = arboard::Clipboard::new() {
+        let _ = cb.set_text(text.to_string());
+    }
+}
+
+/// Read text from the system clipboard, if any.
+fn get_clipboard() -> Option<String> {
+    arboard::Clipboard::new()
+        .ok()
+        .and_then(|mut cb| cb.get_text().ok())
 }
 
 // ---- components ------------------------------------------------------------
@@ -273,7 +334,12 @@ fn App() -> Element {
     let snap = snapshot();
 
     let sidebar = rsx! { Sidebar { snap: snap.clone(), tick, show_notifications } };
-    let main = rsx! { PaneArea { snap: snap.clone(), tick } };
+    let main = rsx! {
+        div { class: "content",
+            TabBar { snap: snap.clone(), tick }
+            PaneArea { snap: snap.clone(), tick }
+        }
+    };
 
     rsx! {
         style { {BASE_CSS} }
@@ -322,6 +388,19 @@ fn App() -> Element {
                                 show_notifications.set(false);
                                 h
                             }
+                            "copySelection" => {
+                                let text = e.lock().unwrap().copy_selection();
+                                if let Some(t) = text {
+                                    set_clipboard(&t);
+                                }
+                                true
+                            }
+                            "paste" => {
+                                if let Some(t) = get_clipboard() {
+                                    e.lock().unwrap().write_focused(t.as_bytes());
+                                }
+                                true
+                            }
                             _ => e.lock().unwrap().dispatch_action(&action),
                         };
                         if handled {
@@ -331,9 +410,15 @@ fn App() -> Element {
                         }
                     }
                 }
-                // 2) Otherwise, type into the focused pane's PTY.
+                // 2) Otherwise, type into the focused pane's PTY (and drop any
+                //    selection, like a real terminal does on keypress).
                 if let Some(bytes) = keys::key_event_to_bytes(&key, mods) {
-                    if e.lock().unwrap().write_focused(&bytes) {
+                    let wrote = {
+                        let mut g = e.lock().unwrap();
+                        g.clear_selection();
+                        g.write_focused(&bytes)
+                    };
+                    if wrote {
                         evt.prevent_default();
                         tick += 1;
                     }
@@ -526,6 +611,26 @@ fn SettingsPanel(tick: Signal<u64>, show_settings: Signal<bool>) -> Element {
                             onchange: move |evt| apply_config("notifications.ringOnBell", &bool_str(&evt.value()), tick),
                         }
                     }
+                    div { class: "settings-section", "Keyboard shortcuts" }
+                    for (action, chord) in cfg.keyboard_shortcuts.clone() {
+                        {
+                            // Own the path in the closure; action/chord are only
+                            // interpolated (keeps the release rsx expansion happy).
+                            let path = format!("keyboardShortcuts.{action}");
+                            rsx! {
+                                div { class: "settings-row",
+                                    span { class: "settings-label", "{action}" }
+                                    div { class: "settings-control",
+                                        input {
+                                            class: "shortcut-input",
+                                            value: "{chord}",
+                                            onchange: move |evt| apply_config(&path, &evt.value(), tick),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 div { class: "settings-foot", "Saved to ~/.config/cmux/cmux.json" }
             }
@@ -586,11 +691,12 @@ fn CommandPalette(
     show_notifications: Signal<bool>,
 ) -> Element {
     let mut query = use_signal(String::new);
-    let shortcuts = {
+    let (shortcuts, custom) = {
         let g = engine().lock().unwrap();
-        g.config.keyboard_shortcuts.clone()
+        (g.config.keyboard_shortcuts.clone(), g.config.actions.clone())
     };
-    let all = palette::all_actions(&shortcuts);
+    let mut all = palette::all_actions(&shortcuts);
+    all.extend(palette::custom_actions(&custom));
     let results = palette::filter_actions(&query(), &all);
     let top = results.first().map(|a| a.id.clone());
 
@@ -625,13 +731,22 @@ fn CommandPalette(
                 }
                 div { class: "palette-list",
                     for a in results.iter().cloned() {
-                        div {
-                            key: "{a.id}",
-                            class: "palette-item",
-                            onclick: move |_| run_palette_action(&a.id, tick, show_palette, show_notifications),
-                            span { class: "palette-label", "{a.label}" }
-                            if let Some(sc) = a.shortcut.clone() {
-                                span { class: "palette-chord", "{sc}" }
+                        {
+                            // Own the id in the click closure so the rsx key/label
+                            // interpolations can still borrow `a` (release rsx
+                            // expansion moves captured fields; debug hot-reload
+                            // does not, so this only fails to compile in release).
+                            let id = a.id.clone();
+                            rsx! {
+                                div {
+                                    key: "{a.id}",
+                                    class: "palette-item",
+                                    onclick: move |_| run_palette_action(&id, tick, show_palette, show_notifications),
+                                    span { class: "palette-label", "{a.label}" }
+                                    if let Some(sc) = a.shortcut.clone() {
+                                        span { class: "palette-chord", "{sc}" }
+                                    }
+                                }
                             }
                         }
                     }
@@ -690,7 +805,7 @@ fn NotificationPanel(
 fn Sidebar(snap: Snapshot, tick: Signal<u64>, show_notifications: Signal<bool>) -> Element {
     let width = snap.sidebar_width;
     let mut show_notifications = show_notifications;
-    let mut drag_tab = use_signal(|| Option::<TabId>::None);
+    let mut drag_ws = use_signal(|| Option::<WorkspaceId>::None);
     rsx! {
         div {
             class: "sidebar",
@@ -709,67 +824,112 @@ fn Sidebar(snap: Snapshot, tick: Signal<u64>, show_notifications: Signal<bool>) 
                 }
             }
             div { class: "workspaces",
-                for w in snap.workspaces.iter().cloned() {
-                    button {
+                for (idx, w) in snap.workspaces.iter().cloned().enumerate() {
+                    div {
                         key: "{w.id}",
-                        class: if w.active { "ws active" } else { "ws" },
+                        class: if w.active { "ws-row active" } else { "ws-row" },
+                        draggable: "true",
                         onclick: move |_| {
                             engine().lock().unwrap().state.focus_workspace(w.id);
                             tick += 1;
                         },
-                        "{w.title}"
+                        ondragstart: move |_| drag_ws.set(Some(w.id)),
+                        ondragover: move |evt| evt.prevent_default(),
+                        ondrop: move |evt| {
+                            evt.prevent_default();
+                            if let Some(src) = drag_ws() {
+                                engine().lock().unwrap().state.reorder_workspace(src, idx);
+                                drag_ws.set(None);
+                                tick += 1;
+                            }
+                        },
+                        span { class: "ws-title", "{w.title}" }
+                        if w.dir.is_some() || w.branch.is_some() {
+                            div { class: "ws-meta",
+                                if let Some(dir) = w.dir.clone() {
+                                    span { class: "ws-dir", "{dir}" }
+                                }
+                                if let Some(branch) = w.branch.clone() {
+                                    span { class: "ws-branch", "⎇ {branch}" }
+                                }
+                            }
+                        }
                     }
                 }
-                button {
-                    class: "ws add",
+                div {
+                    class: "ws-add",
                     title: "New workspace",
                     onclick: move |_| {
                         engine().lock().unwrap().new_workspace("workspace");
                         tick += 1;
                     },
-                    "+ ws"
+                    "+ New workspace"
                 }
             }
-            div { class: "tabs",
-                for (idx, t) in snap.tabs.iter().cloned().enumerate() {
-                    div {
-                        key: "{t.id}",
-                        class: if t.active { "tab active" } else { "tab" },
-                        draggable: "true",
-                        onclick: move |_| {
+        }
+    }
+}
+
+/// The horizontal tab strip above the split panes — the active workspace's
+/// tabs, mirroring the macOS app's surface tab bar.
+#[component]
+fn TabBar(snap: Snapshot, tick: Signal<u64>) -> Element {
+    let mut drag_tab = use_signal(|| Option::<TabId>::None);
+    rsx! {
+        div { class: "tabbar",
+            for (idx, t) in snap.tabs.iter().cloned().enumerate() {
+                div {
+                    key: "{t.id}",
+                    class: if t.active { "tab active" } else { "tab" },
+                    draggable: "true",
+                    onclick: move |_| {
+                        let mut g = engine().lock().unwrap();
+                        if let Some(ws) = g.state.active_workspace {
+                            g.state.focus_tab(ws, t.id);
+                        }
+                        tick += 1;
+                    },
+                    ondragstart: move |_| drag_tab.set(Some(t.id)),
+                    ondragover: move |evt| evt.prevent_default(),
+                    ondrop: move |evt| {
+                        evt.prevent_default();
+                        if let Some(src) = drag_tab() {
                             let mut g = engine().lock().unwrap();
                             if let Some(ws) = g.state.active_workspace {
-                                g.state.focus_tab(ws, t.id);
+                                g.state.reorder_tab(ws, src, idx);
+                            }
+                            drag_tab.set(None);
+                            tick += 1;
+                        }
+                    },
+                    if t.attention {
+                        span { class: "ring-dot", "●" }
+                    }
+                    span { class: "tab-title", "{t.title}" }
+                    span {
+                        class: "tab-close",
+                        title: "Close tab",
+                        onclick: move |evt| {
+                            evt.stop_propagation();
+                            let mut g = engine().lock().unwrap();
+                            if let Some(ws) = g.state.active_workspace {
+                                g.state.close_tab(ws, t.id);
+                                g.ensure_runtimes();
                             }
                             tick += 1;
                         },
-                        ondragstart: move |_| drag_tab.set(Some(t.id)),
-                        ondragover: move |evt| evt.prevent_default(),
-                        ondrop: move |evt| {
-                            evt.prevent_default();
-                            if let Some(src) = drag_tab() {
-                                let mut g = engine().lock().unwrap();
-                                if let Some(ws) = g.state.active_workspace {
-                                    g.state.reorder_tab(ws, src, idx);
-                                }
-                                drag_tab.set(None);
-                                tick += 1;
-                            }
-                        },
-                        if t.attention {
-                            span { class: "ring-dot", "●" }
-                        }
-                        span { class: "tab-title", "{t.title}" }
+                        "✕"
                     }
                 }
-                button {
-                    class: "tab add",
-                    onclick: move |_| {
-                        engine().lock().unwrap().new_tab();
-                        tick += 1;
-                    },
-                    "+ tab"
-                }
+            }
+            div {
+                class: "tab-add",
+                title: "New tab",
+                onclick: move |_| {
+                    engine().lock().unwrap().new_tab();
+                    tick += 1;
+                },
+                "+"
             }
         }
     }
@@ -778,9 +938,19 @@ fn Sidebar(snap: Snapshot, tick: Signal<u64>, show_notifications: Signal<bool>) 
 #[component]
 fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
     let font = snap.font_size;
+    // Configured terminal font, always falling back to a monospace family.
+    let family = snap.font_family.clone();
+    // Monospace cell metrics for cursor placement (mirror `cell_at`).
+    let char_w = font as f64 * 0.6;
+    let line_h = font as f64 * 1.2;
+    let cursor_style = snap.cursor_style;
     // Divider-drag state and the measured pane-area rect (viewport pixels).
     let mut dragging = use_signal(|| Option::<DragInfo>::None);
     let mut area_rect = use_signal(|| Option::<(f64, f64, f64, f64)>::None);
+    // Pane whose terminal is currently being mouse-selected, if any.
+    let mut selecting = use_signal(|| Option::<PaneId>::None);
+    // Open right-click context menu, if any.
+    let mut ctx_menu = use_signal(|| Option::<CtxMenu>::None);
     rsx! {
         div {
             class: "pane-area",
@@ -808,7 +978,10 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                     }
                 }
             },
-            onmouseup: move |_| dragging.set(None),
+            onmouseup: move |_| {
+                dragging.set(None);
+                selecting.set(None);
+            },
             onmouseleave: move |_| dragging.set(None),
             for p in snap.panes.iter().cloned() {
                 {
@@ -847,7 +1020,50 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                             } else {
                                 div {
                                     class: "grid",
-                                    style: "font-size:{font}px;",
+                                    style: "font-size:{font}px;font-family:{family}, monospace;",
+                                    onmousedown: move |evt| {
+                                        // Cell metrics mirror the rendered font (6px grid
+                                        // padding, line-height 1.2, ~0.6em monospace advance).
+                                        let (row, col) = cell_at(&evt, font);
+                                        // Ctrl-click a URL opens it in a browser pane.
+                                        if evt.modifiers().ctrl() {
+                                            let url = engine().lock().unwrap().url_at(pid, row, col);
+                                            if let Some(u) = url {
+                                                engine()
+                                                    .lock()
+                                                    .unwrap()
+                                                    .open_browser(&u, Orientation::Horizontal);
+                                                tick += 1;
+                                                return;
+                                            }
+                                        }
+                                        // Otherwise begin a text selection at the clicked cell.
+                                        let mut g = engine().lock().unwrap();
+                                        g.state.focus_pane(pid);
+                                        g.begin_selection(pid, row, col);
+                                        selecting.set(Some(pid));
+                                        tick += 1;
+                                    },
+                                    onmousemove: move |evt| {
+                                        if selecting() == Some(pid) {
+                                            let (row, col) = cell_at(&evt, font);
+                                            engine().lock().unwrap().extend_selection(pid, row, col);
+                                            tick += 1;
+                                        }
+                                    },
+                                    onmouseup: move |_| selecting.set(None),
+                                    oncontextmenu: move |evt| {
+                                        evt.prevent_default();
+                                        let (row, col) = cell_at(&evt, font);
+                                        let c = evt.data().client_coordinates();
+                                        let url = {
+                                            let mut g = engine().lock().unwrap();
+                                            g.state.focus_pane(pid);
+                                            g.url_at(pid, row, col)
+                                        };
+                                        ctx_menu.set(Some(CtxMenu { x: c.x, y: c.y, pane: pid, url }));
+                                        tick += 1;
+                                    },
                                     onmounted: move |evt| {
                                         // Size the PTY/grid to the rendered pane using
                                         // monospace cell metrics derived from the font.
@@ -889,6 +1105,99 @@ fn PaneArea(snap: Snapshot, tick: Signal<u64>) -> Element {
                                             }
                                         }
                                     }
+                                    if let Some((cr, cc)) = p.cursor {
+                                        {
+                                            let cx = cc as f64 * char_w;
+                                            let cy = cr as f64 * line_h;
+                                            rsx! {
+                                                div {
+                                                    class: "cursor cursor-{cursor_style}",
+                                                    style: "left:calc(6px + {cx}px);top:calc(6px + {cy}px);width:{char_w}px;height:{line_h}px;",
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(m) = ctx_menu() {
+                {
+                    let pane = m.pane;
+                    let url = m.url.clone();
+                    rsx! {
+                        div {
+                            class: "ctx-backdrop",
+                            onmousedown: move |_| ctx_menu.set(None),
+                            oncontextmenu: move |e| {
+                                e.prevent_default();
+                                ctx_menu.set(None);
+                            },
+                            div {
+                                class: "ctxmenu",
+                                style: "left:{m.x}px;top:{m.y}px;",
+                                onmousedown: move |e| e.stop_propagation(),
+                                div {
+                                    class: "ctx-item",
+                                    onclick: move |_| {
+                                        let t = engine().lock().unwrap().copy_selection();
+                                        if let Some(t) = t { set_clipboard(&t); }
+                                        ctx_menu.set(None);
+                                        tick += 1;
+                                    },
+                                    "Copy"
+                                }
+                                div {
+                                    class: "ctx-item",
+                                    onclick: move |_| {
+                                        if let Some(t) = get_clipboard() {
+                                            engine().lock().unwrap().write_pane(pane, t.as_bytes());
+                                        }
+                                        ctx_menu.set(None);
+                                        tick += 1;
+                                    },
+                                    "Paste"
+                                }
+                                if let Some(u) = url.clone() {
+                                    div {
+                                        class: "ctx-item",
+                                        onclick: move |_| {
+                                            engine().lock().unwrap().open_browser(&u, Orientation::Horizontal);
+                                            ctx_menu.set(None);
+                                            tick += 1;
+                                        },
+                                        "Open link"
+                                    }
+                                }
+                                div { class: "ctx-sep" }
+                                div {
+                                    class: "ctx-item",
+                                    onclick: move |_| {
+                                        engine().lock().unwrap().split_focused(Orientation::Horizontal);
+                                        ctx_menu.set(None);
+                                        tick += 1;
+                                    },
+                                    "Split right"
+                                }
+                                div {
+                                    class: "ctx-item",
+                                    onclick: move |_| {
+                                        engine().lock().unwrap().split_focused(Orientation::Vertical);
+                                        ctx_menu.set(None);
+                                        tick += 1;
+                                    },
+                                    "Split down"
+                                }
+                                div {
+                                    class: "ctx-item",
+                                    onclick: move |_| {
+                                        engine().lock().unwrap().close_pane(pane);
+                                        ctx_menu.set(None);
+                                        tick += 1;
+                                    },
+                                    "Close pane"
                                 }
                             }
                         }
@@ -951,31 +1260,27 @@ fn handle_shortcut(key: &str, tick: &mut Signal<u64>) -> bool {
 const BASE_CSS: &str = r#"
 * { box-sizing: border-box; }
 html, body, #main, .app { height: 100%; margin: 0; }
-.app.theme-dark {
-    --bg:#181825; --panel:#1e1e2e; --deep:#11111b; --panel2:#313244;
-    --border:#313244; --border-strong:#45475a; --text:#cdd6f4; --text-dim:#bac2de;
-    --muted:#6c7086; --accent:#4c71f2; --on-accent:#ffffff;
-    --term-fg:#cdd6f4; --term-bg:#1e1e2e; --overlay:rgba(0,0,0,0.4);
+/* Neutral near-black dark palette, matching the macOS cmux app. */
+.app.theme-dark, .app.theme-system {
+    --bg:#191919; --panel:#1e1e1e; --deep:#141414; --panel2:#2a2a2a;
+    --border:#2c2c2c; --border-strong:#3a3a3a; --text:#dcdcdc; --text-dim:#a6a6a6;
+    --muted:#6e6e6e; --accent:#4c71f2; --on-accent:#ffffff;
+    --term-fg:#dcdcdc; --term-bg:#191919; --overlay:rgba(0,0,0,0.5); --sel-bg:#33406b;
 }
 .app.theme-light {
-    --bg:#eff1f5; --panel:#e6e9ef; --deep:#dce0e8; --panel2:#ccd0da;
-    --border:#ccd0da; --border-strong:#bcc0cc; --text:#4c4f69; --text-dim:#5c5f77;
-    --muted:#8c8fa1; --accent:#1e66f5; --on-accent:#ffffff;
-    --term-fg:#4c4f69; --term-bg:#eff1f5; --overlay:rgba(60,60,80,0.35);
+    --bg:#f5f5f6; --panel:#ededee; --deep:#e3e3e5; --panel2:#dddde0;
+    --border:#dadadc; --border-strong:#c6c6c9; --text:#1f1f22; --text-dim:#55555b;
+    --muted:#8a8a90; --accent:#3257e0; --on-accent:#ffffff;
+    --term-fg:#1f1f22; --term-bg:#f5f5f6; --overlay:rgba(40,40,45,0.4); --sel-bg:#b9c4ef;
 }
-/* "system" theme: dark by default, light when the OS prefers light. */
-.app.theme-system {
-    --bg:#181825; --panel:#1e1e2e; --deep:#11111b; --panel2:#313244;
-    --border:#313244; --border-strong:#45475a; --text:#cdd6f4; --text-dim:#bac2de;
-    --muted:#6c7086; --accent:#4c71f2; --on-accent:#ffffff;
-    --term-fg:#cdd6f4; --term-bg:#1e1e2e; --overlay:rgba(0,0,0,0.4);
-}
+/* "system" theme follows the OS: it defaults dark (above) and flips to a
+   neutral light when the desktop prefers light. */
 @media (prefers-color-scheme: light) {
     .app.theme-system {
-        --bg:#eff1f5; --panel:#e6e9ef; --deep:#dce0e8; --panel2:#ccd0da;
-        --border:#ccd0da; --border-strong:#bcc0cc; --text:#4c4f69; --text-dim:#5c5f77;
-        --muted:#8c8fa1; --accent:#1e66f5; --on-accent:#ffffff;
-        --term-fg:#4c4f69; --term-bg:#eff1f5; --overlay:rgba(60,60,80,0.35);
+        --bg:#f5f5f6; --panel:#ededee; --deep:#e3e3e5; --panel2:#dddde0;
+        --border:#dadadc; --border-strong:#c6c6c9; --text:#1f1f22; --text-dim:#55555b;
+        --muted:#8a8a90; --accent:#3257e0; --on-accent:#ffffff;
+        --term-fg:#1f1f22; --term-bg:#f5f5f6; --overlay:rgba(40,40,45,0.4); --sel-bg:#b9c4ef;
     }
 }
 /* Background-opacity model: siblings (.sidebar, .pane-area>.pane) are tinted
@@ -993,31 +1298,63 @@ html, body, #main, .app { height: 100%; margin: 0; }
 }
 .sidebar-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 12px; font-weight: 600; border-bottom: 1px solid var(--border);
+    padding: 9px 12px; font-weight: 600; font-size: 13px;
+    border-bottom: 1px solid var(--border);
 }
-.logo { color: var(--accent); }
+.logo { color: var(--accent); letter-spacing: 0.2px; }
 .unread {
     background: var(--accent); color: var(--on-accent); border-radius: 10px;
     padding: 1px 7px; font-size: 11px;
 }
-.workspaces { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px; }
-.ws {
-    background: var(--panel2); color: var(--text); border: none; border-radius: 6px;
-    padding: 4px 8px; font-size: 12px; cursor: pointer;
-}
-.ws.active { background: var(--accent); color: var(--on-accent); }
-.ws.add, .tab.add { background: transparent; border: 1px dashed var(--border-strong); color: var(--muted); }
-.tabs { display: flex; flex-direction: column; gap: 2px; padding: 8px; }
-.tab {
-    display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+/* Workspaces: a compact vertical list of rows (cmux's "vertical tabs"). */
+.workspaces { display: flex; flex-direction: column; gap: 1px; padding: 6px; }
+.ws-row {
+    display: flex; flex-direction: column; gap: 2px; padding: 6px 9px;
     border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text-dim);
+    border-left: 2px solid transparent; overflow: hidden;
+}
+.ws-row:hover { background: var(--panel2); }
+.ws-row.active { background: var(--panel2); color: var(--text); border-left-color: var(--accent); }
+.ws-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-meta {
+    display: flex; gap: 8px; font-size: 11px; color: var(--muted);
+    overflow: hidden; white-space: nowrap;
+}
+.ws-dir { overflow: hidden; text-overflow: ellipsis; }
+.ws-branch { color: var(--accent); flex: 0 0 auto; opacity: 0.85; }
+.ws-add {
+    padding: 6px 9px; font-size: 12px; color: var(--muted);
+    cursor: pointer; border-radius: 6px;
+}
+.ws-add:hover { background: var(--panel2); color: var(--text-dim); }
+/* Content column: the horizontal tab strip above the split panes. */
+.content { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
+.tabbar {
+    display: flex; align-items: stretch; min-height: 33px; overflow-x: auto;
+    background: color-mix(in srgb, var(--panel) calc(var(--term-opacity, 1) * 100%), transparent);
+    border-bottom: 1px solid var(--border);
+}
+.tab {
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px 6px 12px;
+    cursor: pointer; font-size: 13px; color: var(--text-dim);
+    border-right: 1px solid var(--border); max-width: 220px; flex: 0 0 auto;
 }
 .tab:hover { background: var(--panel2); }
-.tab.active { background: var(--panel2); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
-.ring-dot { color: var(--accent); font-size: 10px; }
+.tab.active {
+    background: color-mix(in srgb, var(--term-bg) calc(var(--term-opacity, 1) * 100%), transparent);
+    color: var(--text); box-shadow: inset 0 -2px 0 var(--accent);
+}
+.ring-dot { color: var(--accent); font-size: 9px; }
 .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tab.add { justify-content: center; cursor: pointer; }
-.pane-area { position: relative; flex: 1 1 auto; background: transparent; }
+.tab-close { color: var(--muted); font-size: 11px; opacity: 0; padding: 0 2px; border-radius: 3px; }
+.tab:hover .tab-close, .tab.active .tab-close { opacity: 1; }
+.tab-close:hover { color: var(--text); background: var(--border-strong); }
+.tab-add {
+    display: flex; align-items: center; padding: 0 12px; color: var(--muted);
+    cursor: pointer; font-size: 16px; flex: 0 0 auto;
+}
+.tab-add:hover { color: var(--text); }
+.pane-area { position: relative; flex: 1 1 auto; min-height: 0; background: transparent; }
 .pane {
     position: absolute; overflow: hidden;
     background: color-mix(in srgb, var(--term-bg) calc(var(--term-opacity, 1) * 100%), transparent);
@@ -1033,7 +1370,14 @@ html, body, #main, .app { height: 100%; margin: 0; }
     font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
     line-height: 1.2; white-space: pre; padding: 6px; height: 100%;
     overflow: hidden; color: var(--term-fg); background: transparent;
+    position: relative;
+    /* Our own selection model draws the highlight, so suppress the webview's. */
+    user-select: none; -webkit-user-select: none; cursor: text;
 }
+.cursor { position: absolute; pointer-events: none; box-sizing: border-box; }
+.cursor-block { background: var(--term-fg); opacity: 0.5; }
+.cursor-bar { border-left: 2px solid var(--accent); }
+.cursor-underline { border-bottom: 2px solid var(--term-fg); }
 .row { white-space: pre; }
 .browser { display: flex; flex-direction: column; height: 100%; }
 .browser-url {
@@ -1041,6 +1385,18 @@ html, body, #main, .app { height: 100%; margin: 0; }
     padding: 6px 10px; font-size: 12px; border-bottom: 1px solid var(--border);
 }
 .browser-frame { flex: 1 1 auto; width: 100%; border: none; background: #fff; }
+.ctx-backdrop { position: fixed; inset: 0; z-index: 80; }
+.ctxmenu {
+    position: fixed; min-width: 168px; background: var(--panel);
+    border: 1px solid var(--border-strong); border-radius: 8px; padding: 4px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.ctx-item {
+    padding: 6px 12px; font-size: 13px; color: var(--text);
+    border-radius: 5px; cursor: pointer; white-space: nowrap;
+}
+.ctx-item:hover { background: var(--panel2); }
+.ctx-sep { height: 1px; background: var(--border); margin: 4px 6px; }
 .divider { position: absolute; z-index: 5; background: transparent; }
 .divider:hover { background: var(--accent); opacity: 0.5; }
 .findbar {
@@ -1133,4 +1489,12 @@ html, body, #main, .app { height: 100%; margin: 0; }
 }
 .settings-control input[type=checkbox] { width: 16px; height: 16px; }
 .settings-foot { padding: 10px 16px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--border); }
+.settings-section {
+    margin-top: 14px; padding: 6px 0 2px; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted);
+    border-bottom: 1px solid var(--border);
+}
+.shortcut-input {
+    font-family: monospace; font-size: 12px; width: 150px; text-align: right;
+}
 "#;

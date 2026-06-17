@@ -282,6 +282,58 @@ impl SplitTree {
         false
     }
 
+    /// Swap two leaf panes in place: the tree shape is unchanged, the two panes
+    /// exchange positions. Returns `false` unless both leaves exist and differ.
+    pub fn swap(&mut self, a: PaneId, b: PaneId) -> bool {
+        if a == b || !self.contains(a) || !self.contains(b) {
+            return false;
+        }
+        if let Some(root) = &mut self.root {
+            Self::swap_node(root, a, b);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn swap_node(node: &mut Node, a: PaneId, b: PaneId) {
+        match node {
+            Node::Leaf(p) => {
+                if *p == a {
+                    *p = b;
+                } else if *p == b {
+                    *p = a;
+                }
+            }
+            Node::Split { first, second, .. } => {
+                Self::swap_node(first, a, b);
+                Self::swap_node(second, a, b);
+            }
+        }
+    }
+
+    /// Reset every split's divider to an even 0.5 ratio (upstream "equalize
+    /// splits"). Leaves are unaffected.
+    pub fn equalize(&mut self) {
+        if let Some(root) = &mut self.root {
+            Self::equalize_node(root);
+        }
+    }
+
+    fn equalize_node(node: &mut Node) {
+        if let Node::Split {
+            ratio,
+            first,
+            second,
+            ..
+        } = node
+        {
+            *ratio = 0.5;
+            Self::equalize_node(first);
+            Self::equalize_node(second);
+        }
+    }
+
     /// Enumerate the dividers (split boundaries) within `viewport`, in
     /// pre-order over split nodes. The `split_index` aligns with
     /// [`SplitTree::set_ratio_by_index`] so a dragged divider can be addressed.
@@ -538,6 +590,29 @@ mod tests {
         t.set_ratio_by_index(0, 5.0);
         let d = t.dividers(Rect::new(0.0, 0.0, 1.0, 1.0));
         assert_eq!(d[0].ratio, 0.95);
+    }
+
+    #[test]
+    fn swap_exchanges_two_leaves() {
+        let mut t = SplitTree::single(PaneId(1));
+        t.split(PaneId(1), PaneId(2), Orientation::Horizontal, false);
+        assert_eq!(t.leaves(), vec![PaneId(1), PaneId(2)]);
+        assert!(t.swap(PaneId(1), PaneId(2)));
+        assert_eq!(t.leaves(), vec![PaneId(2), PaneId(1)]);
+        assert!(!t.swap(PaneId(1), PaneId(1)));
+        assert!(!t.swap(PaneId(1), PaneId(99)));
+    }
+
+    #[test]
+    fn equalize_resets_all_ratios() {
+        let mut t = SplitTree::single(PaneId(1));
+        t.split(PaneId(1), PaneId(2), Orientation::Horizontal, false);
+        t.split(PaneId(2), PaneId(3), Orientation::Vertical, false);
+        t.set_ratio_by_index(0, 0.2);
+        t.set_ratio_by_index(1, 0.8);
+        t.equalize();
+        let d = t.dividers(Rect::new(0.0, 0.0, 1.0, 1.0));
+        assert!(d.iter().all(|d| d.ratio == 0.5));
     }
 
     #[test]

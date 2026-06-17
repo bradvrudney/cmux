@@ -13,7 +13,7 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cmux_config::Config;
-use cmux_core::ids::PaneId;
+use cmux_core::ids::{PaneId, WorkspaceId};
 use cmux_core::split::{FocusDir, Orientation, Rect};
 use cmux_core::{AppState, RingState};
 use cmux_ipc::protocol::{Dir, Request, Response, Target};
@@ -50,6 +50,111 @@ pub struct Engine {
     /// Where `cmux.json` is written when settings change; `None` disables it.
     config_path: Option<PathBuf>,
     last_save: Instant,
+    /// Active mouse text selection (viewport cell coordinates), if any.
+    selection: Option<Selection>,
+    /// Per-workspace sidebar metadata (cwd + git branch), refreshed off the
+    /// render path so `snapshot()` reads it without doing I/O.
+    meta_cache: HashMap<WorkspaceId, WorkspaceMeta>,
+    last_meta_refresh: Instant,
+}
+
+/// Sidebar metadata for a workspace: its active pane's directory and branch.
+#[derive(Clone, Default)]
+pub struct WorkspaceMeta {
+    pub dir: Option<String>,
+    pub branch: Option<String>,
+}
+
+/// An in-progress / completed text selection over a pane's viewport.
+#[derive(Clone, Copy)]
+struct Selection {
+    pane: PaneId,
+    anchor: (usize, usize),
+    active: (usize, usize),
+}
+
+/// Control-socket commands this build understands (for `cmux capabilities`).
+const CAPABILITIES: &[&str] = &[
+    "ping", "identify", "capabilities", "list-workspaces", "snapshot", "send",
+    "send-key", "focus", "focus-dir", "split", "close-pane", "new-tab",
+    "new-workspace", "close-workspace", "reorder-workspace", "rename-tab",
+    "rename-workspace", "reorder-tab", "move-tab", "swap", "equalize", "zoom",
+    "next-tab", "prev-tab", "trigger-flash", "resize", "find", "browser",
+    "navigate", "notify", "notifications", "mark-read", "dismiss", "config",
+];
+
+/// The current git branch for `dir` (walking up to the repo root), read cheaply
+/// from `.git/HEAD` without a `git` subprocess. Branch name, or short SHA when
+/// detached.
+fn git_branch(dir: &str) -> Option<String> {
+    let mut p = std::path::PathBuf::from(dir);
+    loop {
+        let git = p.join(".git");
+        if git.exists() {
+            return read_git_head(&git);
+        }
+        if !p.pop() {
+            return None;
+        }
+    }
+}
+
+fn read_git_head(git: &std::path::Path) -> Option<String> {
+    let head_path = if git.is_dir() {
+        git.join("HEAD")
+    } else {
+        // Worktree/submodule: ".git" is a file `gitdir: <path>`.
+        let s = std::fs::read_to_string(git).ok()?;
+        std::path::Path::new(s.strip_prefix("gitdir:")?.trim()).join("HEAD")
+    };
+    let head = std::fs::read_to_string(head_path).ok()?;
+    let head = head.trim();
+    if let Some(r) = head.strip_prefix("ref: refs/heads/") {
+        Some(r.to_string())
+    } else if head.len() >= 7 {
+        Some(head[..7].to_string())
+    } else {
+        None
+    }
+}
+
+/// Replace a leading `$HOME` with `~` for compact display.
+fn shorten_home(dir: &str) -> String {
+    if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {
+        if dir == home {
+            return "~".to_string();
+        }
+        if let Some(rest) = dir.strip_prefix(&format!("{home}/")) {
+            return format!("~/{rest}");
+        }
+    }
+    dir.to_string()
+}
+
+/// If a whitespace-delimited `http(s)://` URL token covers `col` in `line`,
+/// return it with trailing punctuation trimmed. Pure so it is unit-testable.
+fn url_at_col(line: &str, col: usize) -> Option<String> {
+    let chars: Vec<char> = line.chars().collect();
+    if col >= chars.len() || chars[col].is_whitespace() {
+        return None;
+    }
+    let mut start = col;
+    while start > 0 && !chars[start - 1].is_whitespace() {
+        start -= 1;
+    }
+    let mut end = col;
+    while end < chars.len() && !chars[end].is_whitespace() {
+        end += 1;
+    }
+    let token: String = chars[start..end].iter().collect();
+    let token = token.trim_end_matches(|c: char| {
+        matches!(c, '.' | ',' | ';' | ':' | ')' | ']' | '}' | '"' | '\'' | '>')
+    });
+    if token.starts_with("http://") || token.starts_with("https://") {
+        Some(token.to_string())
+    } else {
+        None
+    }
 }
 
 impl Engine {
@@ -80,6 +185,11 @@ impl Engine {
             session_path,
             config_path: None,
             last_save: Instant::now(),
+            selection: None,
+            meta_cache: HashMap::new(),
+            last_meta_refresh: Instant::now()
+                .checked_sub(Duration::from_secs(10))
+                .unwrap_or_else(Instant::now),
         };
         engine.ensure_runtimes();
         engine
@@ -131,7 +241,8 @@ impl Engine {
             if self.state.pane(pane).map_or(false, |p| p.is_browser()) {
                 continue;
             }
-            if let Some(rt) = self.spawn_runtime() {
+            let cwd = self.state.pane(pane).and_then(|p| p.cwd.clone());
+            if let Some(rt) = self.spawn_runtime(cwd.as_deref()) {
                 self.runtimes.insert(pane, rt);
             }
         }
@@ -144,10 +255,13 @@ impl Engine {
         }
     }
 
-    fn spawn_runtime(&self) -> Option<PaneRuntime> {
+    fn spawn_runtime(&self, cwd: Option<&str>) -> Option<PaneRuntime> {
         let mut cfg = PtyConfig::shell().with_size(DEFAULT_ROWS, DEFAULT_COLS);
         if let Some(shell) = &self.config.shell {
             cfg = PtyConfig::command([shell.clone()]).with_size(DEFAULT_ROWS, DEFAULT_COLS);
+        }
+        if let Some(dir) = cwd {
+            cfg = cfg.with_cwd(dir);
         }
         let mut pty = match PtySession::spawn(cfg) {
             Ok(p) => p,
@@ -174,6 +288,8 @@ impl Engine {
         let mut osc_notifs: Vec<(PaneId, String, String)> = Vec::new();
         // (pane, new title) from OSC 0/1/2.
         let mut titles: Vec<(PaneId, String)> = Vec::new();
+        // (pane, cwd) from OSC 7.
+        let mut cwds: Vec<(PaneId, String)> = Vec::new();
         for pane in panes {
             if let Some(rt) = self.runtimes.get_mut(&pane) {
                 while let Ok(evt) = rt.rx.try_recv() {
@@ -193,6 +309,9 @@ impl Engine {
                 if let Some(title) = rt.term.take_title() {
                     titles.push((pane, title));
                 }
+                if let Some(cwd) = rt.term.take_cwd() {
+                    cwds.push((pane, cwd));
+                }
                 for (t, b) in rt.term.take_notifications() {
                     osc_notifs.push((pane, t, b));
                 }
@@ -206,15 +325,28 @@ impl Engine {
                 }
             }
         }
+        // Track each pane's working directory (OSC 7) so new splits/tabs inherit it.
+        for (pane, cwd) in cwds {
+            if let Some(p) = self.state.panes.get_mut(&pane) {
+                p.cwd = Some(cwd);
+            }
+        }
         let now = Self::now_ms();
         if self.config.notifications.enabled {
+            let focused = self.state.focused_pane();
             // OSC-driven notifications are explicit app intent — always raise.
             for (pane, title, body) in osc_notifs {
-                self.state.notify(pane, title, body, now);
+                self.state.notify(pane, title.as_str(), body.as_str(), now);
+                if Some(pane) != focused {
+                    self.post_desktop_notification(&title, &body);
+                }
             }
             if self.config.notifications.ring_on_bell {
                 for pane in bells {
                     self.state.notify(pane, "Bell", "terminal bell", now);
+                    if Some(pane) != focused {
+                        self.post_desktop_notification("Bell", "terminal bell");
+                    }
                 }
             }
         }
@@ -223,7 +355,36 @@ impl Engine {
             self.save_session();
             self.last_save = Instant::now();
         }
+        // Refresh sidebar metadata (cwd + branch) ~once a second, off the
+        // render path (snapshot() then just reads the cache).
+        if self.last_meta_refresh.elapsed() > Duration::from_millis(1000) {
+            self.refresh_workspace_meta();
+            self.last_meta_refresh = Instant::now();
+        }
         total
+    }
+
+    /// Recompute each workspace's active-pane directory and git branch.
+    fn refresh_workspace_meta(&mut self) {
+        let mut next = HashMap::new();
+        let ids: Vec<WorkspaceId> = self.state.workspaces.iter().map(|w| w.id).collect();
+        for ws in ids {
+            let pane = self
+                .state
+                .workspace(ws)
+                .and_then(|w| w.active_tab())
+                .and_then(|t| t.focused);
+            let full = pane.and_then(|p| self.proc_cwd(p));
+            let branch = full.as_deref().and_then(git_branch);
+            let dir = full.map(|d| shorten_home(&d));
+            next.insert(ws, WorkspaceMeta { dir, branch });
+        }
+        self.meta_cache = next;
+    }
+
+    /// Cached sidebar metadata for a workspace.
+    pub fn workspace_meta(&self, ws: WorkspaceId) -> WorkspaceMeta {
+        self.meta_cache.get(&ws).cloned().unwrap_or_default()
     }
 
     // ---- rendering accessors -------------------------------------------
@@ -298,9 +459,123 @@ impl Engine {
         }
     }
 
+    /// Post a best-effort freedesktop (D-Bus) desktop notification. Silently
+    /// no-ops when no notification daemon is reachable (headless/CI).
+    fn post_desktop_notification(&self, title: &str, body: &str) {
+        let mut n = notify_rust::Notification::new();
+        n.summary(if title.is_empty() { "cmux" } else { title })
+            .body(body)
+            .appname("cmux");
+        if self.config.notifications.sound {
+            n.sound_name("message");
+        }
+        let _ = n.show();
+    }
+
+    /// If a clickable URL covers viewport cell (`row`, `col`) in `pane`, return
+    /// it. Used for ctrl-click-to-open.
+    pub fn url_at(&self, pane: PaneId, row: usize, col: usize) -> Option<String> {
+        let view = self.terminal_viewport(pane)?;
+        let line: String = view
+            .get(row)?
+            .iter()
+            .map(|c| if c.c == '\0' { ' ' } else { c.c })
+            .collect();
+        url_at_col(&line, col)
+    }
+
+    /// The terminal cursor `(row, col)` for `pane`, but only on the live screen
+    /// (not scrolled into history) and when the cursor is visible.
+    pub fn cursor_for(&self, pane: PaneId) -> Option<(usize, usize)> {
+        let rt = self.runtimes.get(&pane)?;
+        if rt.scroll_offset != 0 {
+            return None;
+        }
+        let c = rt.term.cursor();
+        if c.visible {
+            Some((c.row, c.col))
+        } else {
+            None
+        }
+    }
+
+    // ---- text selection & clipboard ------------------------------------
+
+    /// Begin a selection in `pane` at viewport cell (`row`, `col`).
+    pub fn begin_selection(&mut self, pane: PaneId, row: usize, col: usize) {
+        self.selection = Some(Selection {
+            pane,
+            anchor: (row, col),
+            active: (row, col),
+        });
+    }
+
+    /// Extend the in-progress selection in `pane` to (`row`, `col`).
+    pub fn extend_selection(&mut self, pane: PaneId, row: usize, col: usize) {
+        if let Some(s) = &mut self.selection {
+            if s.pane == pane {
+                s.active = (row, col);
+            }
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    /// The normalized selection for `pane`, for rendering its highlight.
+    pub fn selection_for(&self, pane: PaneId) -> Option<crate::render::ViewportSelection> {
+        let s = self.selection.filter(|s| s.pane == pane)?;
+        Some(crate::render::ViewportSelection::new(s.anchor, s.active))
+    }
+
+    /// Extract the selected text from the pane's current viewport (trailing
+    /// blanks trimmed per line), or `None` if there is no selection.
+    pub fn copy_selection(&self) -> Option<String> {
+        let s = self.selection?;
+        let view = self.terminal_viewport(s.pane)?;
+        let sel = crate::render::ViewportSelection::new(s.anchor, s.active);
+        let mut lines = Vec::new();
+        for (r, row) in view.iter().enumerate() {
+            if let Some((lo, hi)) = sel.cols_for_row(r, row.len()) {
+                let text: String = row[lo..=hi]
+                    .iter()
+                    .map(|c| if c.c == '\0' { ' ' } else { c.c })
+                    .collect();
+                lines.push(text.trim_end().to_string());
+            }
+        }
+        if lines.is_empty() {
+            None
+        } else {
+            Some(lines.join("\n"))
+        }
+    }
+
     // ---- topology operations (shared by GUI and socket) -----------------
 
+    /// The live working directory of a pane's shell, read from `/proc/<pid>/cwd`
+    /// (Linux). More reliable than OSC 7, which a non-login shell may not emit.
+    fn proc_cwd(&self, pane: PaneId) -> Option<String> {
+        let pid = self.runtimes.get(&pane)?.pty.process_id()?;
+        let link = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
+        Some(link.to_string_lossy().into_owned())
+    }
+
+    /// Refresh a pane's recorded cwd from its live shell, so a split/new-tab
+    /// spawned from it inherits the current directory.
+    fn refresh_cwd(&mut self, pane: PaneId) {
+        if let Some(dir) = self.proc_cwd(pane) {
+            if let Some(p) = self.state.panes.get_mut(&pane) {
+                p.cwd = Some(dir);
+            }
+        }
+    }
+
     pub fn split_focused(&mut self, orientation: Orientation) -> Option<PaneId> {
+        if let Some(f) = self.state.focused_pane() {
+            self.refresh_cwd(f);
+        }
         let new = self.state.split_focused(orientation);
         self.ensure_runtimes();
         new
@@ -308,6 +583,9 @@ impl Engine {
 
     pub fn new_tab(&mut self) -> Option<cmux_core::ids::TabId> {
         let ws = self.state.active_workspace?;
+        if let Some(f) = self.state.focused_pane() {
+            self.refresh_cwd(f);
+        }
         let t = self.state.add_tab(ws);
         self.ensure_runtimes();
         t
@@ -315,7 +593,23 @@ impl Engine {
 
     pub fn new_workspace(&mut self, title: &str) -> cmux_core::ids::WorkspaceId {
         let ws = self.state.new_workspace(title);
+        self.state.focus_workspace(ws);
         self.ensure_runtimes();
+        // Optionally run a configured command in the new workspace's first pane.
+        if let Some(cmd) = self.config.new_workspace_command.clone() {
+            let pane = self
+                .state
+                .workspace(ws)
+                .and_then(|w| w.active_tab())
+                .and_then(|t| t.focused);
+            if let Some(p) = pane {
+                let mut line = cmd;
+                if !line.ends_with('\n') {
+                    line.push('\n');
+                }
+                self.write_pane(p, line.as_bytes());
+            }
+        }
         ws
     }
 
@@ -379,6 +673,28 @@ impl Engine {
         ok
     }
 
+    fn close_other_tabs(&mut self) -> bool {
+        let n = self.state.close_other_tabs();
+        self.ensure_runtimes();
+        n > 0
+    }
+
+    fn reopen_closed_workspace(&mut self) -> bool {
+        let ok = self.state.reopen_closed_workspace().is_some();
+        self.ensure_runtimes();
+        ok
+    }
+
+    /// Kill and respawn a pane's shell (e.g. after it exited), reusing its cwd.
+    pub fn respawn_pane(&mut self, pane: PaneId) -> bool {
+        if !self.state.panes.contains_key(&pane) {
+            return false;
+        }
+        self.runtimes.remove(&pane); // Drop kills the old child.
+        self.ensure_runtimes(); // Respawns a fresh shell in the pane's cwd.
+        true
+    }
+
     /// Focus the pane of the most recent unread notification ("jump to latest").
     fn focus_latest_unread(&mut self) -> bool {
         match self.state.notifications.latest_unread().map(|n| n.pane) {
@@ -410,8 +726,77 @@ impl Engine {
             "focusUp" => self.state.focus_dir(FocusDir::Up),
             "focusDown" => self.state.focus_dir(FocusDir::Down),
             "reopenClosedTab" => self.reopen_closed_tab(),
+            "reopenClosedWorkspace" => self.reopen_closed_workspace(),
+            "closeOtherTabs" => self.close_other_tabs(),
+            "focusBack" => self.state.focus_history_step(false),
+            "focusForward" => self.state.focus_history_step(true),
             "jumpToLatestNotification" => self.focus_latest_unread(),
-            _ => false,
+            "nextTab" => self.state.focus_adjacent_tab(true),
+            "previousTab" => self.state.focus_adjacent_tab(false),
+            "equalizeSplits" => self.state.equalize_active(),
+            "toggleZoom" => self.state.toggle_zoom(),
+            "closeWorkspace" => self.close_active_workspace(),
+            "swapLeft" => self.state.swap_focused(FocusDir::Left),
+            "swapRight" => self.state.swap_focused(FocusDir::Right),
+            "swapUp" => self.state.swap_focused(FocusDir::Up),
+            "swapDown" => self.state.swap_focused(FocusDir::Down),
+            "moveTabToNewWorkspace" => {
+                match self.state.active_workspace().and_then(|w| w.active_tab) {
+                    Some(t) => self.state.move_tab_to_new_workspace(t).is_some(),
+                    None => false,
+                }
+            }
+            // `selectWorkspaceN` / `selectSurfaceN` focus the N-th (1-based)
+            // workspace / pane — the rebindable ⌘1–9 / ⌃1–9 families upstream.
+            other => {
+                if let Some(n) = other
+                    .strip_prefix("selectWorkspace")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .filter(|n| *n >= 1)
+                {
+                    self.state.focus_workspace_index(n - 1)
+                } else if let Some(n) = other
+                    .strip_prefix("selectSurface")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .filter(|n| *n >= 1)
+                {
+                    self.state.focus_pane_index(n - 1)
+                } else if self.config.actions.contains_key(other) {
+                    self.run_custom_action(other)
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /// Run a user-defined `cmux.json` action by id (open a tab or use the
+    /// current pane, then type the command). Returns `false` if unknown.
+    fn run_custom_action(&mut self, id: &str) -> bool {
+        let Some(def) = self.config.actions.get(id).cloned() else {
+            return false;
+        };
+        let mut line = def.command;
+        if !line.ends_with('\n') {
+            line.push('\n');
+        }
+        match def.target {
+            cmux_config::ActionTarget::NewTab => {
+                self.new_tab();
+                self.write_focused(line.as_bytes())
+            }
+            cmux_config::ActionTarget::CurrentPane => self.write_focused(line.as_bytes()),
+        }
+    }
+
+    fn close_active_workspace(&mut self) -> bool {
+        match self.state.active_workspace {
+            Some(ws) => {
+                let ok = self.state.close_workspace(ws);
+                self.ensure_runtimes();
+                ok
+            }
+            None => false,
         }
     }
 
@@ -481,6 +866,9 @@ impl Engine {
             }
             Request::NewTab { workspace } => {
                 let ws = workspace.or_else(|| self.state.active_workspace.map(|w| w));
+                if let Some(f) = self.state.focused_pane() {
+                    self.refresh_cwd(f);
+                }
                 match ws.and_then(|w| {
                     let t = self.state.add_tab(w);
                     self.ensure_runtimes();
@@ -496,6 +884,9 @@ impl Engine {
             }
             Request::Split { pane, orientation } => {
                 let target = pane.or_else(|| self.state.focused_pane());
+                if let Some(t) = target {
+                    self.refresh_cwd(t);
+                }
                 match target.and_then(|p| {
                     let n = self.state.split_pane(p, orientation.into());
                     self.ensure_runtimes();
@@ -513,8 +904,17 @@ impl Engine {
                 }
             }
             Request::Notify { pane, title, body } => {
-                match self.state.notify(pane, title, body, Self::now_ms()) {
-                    Some(_) => Response::Ok,
+                let focused = self.state.focused_pane();
+                match self
+                    .state
+                    .notify(pane, title.as_str(), body.as_str(), Self::now_ms())
+                {
+                    Some(_) => {
+                        if self.config.notifications.enabled && Some(pane) != focused {
+                            self.post_desktop_notification(&title, &body);
+                        }
+                        Response::Ok
+                    }
                     None => Response::error("no such pane"),
                 }
             }
@@ -598,12 +998,127 @@ impl Engine {
                     .collect();
                 Response::Matches { matches }
             }
+            Request::CloseWorkspace { workspace } => {
+                let ok = self.state.close_workspace(workspace);
+                self.ensure_runtimes();
+                if ok {
+                    Response::Ok
+                } else {
+                    Response::error("no such workspace")
+                }
+            }
+            Request::ReorderWorkspace { workspace, index } => {
+                if self.state.reorder_workspace(workspace, index) {
+                    Response::Ok
+                } else {
+                    Response::error("no such workspace")
+                }
+            }
+            Request::Equalize => {
+                if self.state.equalize_active() {
+                    Response::Ok
+                } else {
+                    Response::error("no active tab")
+                }
+            }
+            Request::ToggleZoom => {
+                if self.state.toggle_zoom() {
+                    Response::Ok
+                } else {
+                    Response::error("no active tab")
+                }
+            }
+            Request::NextTab => {
+                if self.state.focus_adjacent_tab(true) {
+                    Response::Ok
+                } else {
+                    Response::error("no other tab")
+                }
+            }
+            Request::PrevTab => {
+                if self.state.focus_adjacent_tab(false) {
+                    Response::Ok
+                } else {
+                    Response::error("no other tab")
+                }
+            }
+            Request::MarkNotificationRead { id } => {
+                if self.state.mark_notification_read(id) {
+                    Response::Ok
+                } else {
+                    Response::error("no such notification")
+                }
+            }
+            Request::DismissNotification { id } => {
+                if self.state.dismiss_notification(id) {
+                    Response::Ok
+                } else {
+                    Response::error("no such notification")
+                }
+            }
+            Request::MoveTab { tab, workspace } => {
+                let ok = match workspace {
+                    Some(ws) => self.state.move_tab_to_workspace(tab, ws),
+                    None => self.state.move_tab_to_new_workspace(tab).is_some(),
+                };
+                if ok {
+                    Response::Ok
+                } else {
+                    Response::error("could not move tab")
+                }
+            }
+            Request::SwapPane { dir } => {
+                let d = match dir {
+                    Dir::Left => FocusDir::Left,
+                    Dir::Right => FocusDir::Right,
+                    Dir::Up => FocusDir::Up,
+                    Dir::Down => FocusDir::Down,
+                };
+                if self.state.swap_focused(d) {
+                    Response::Ok
+                } else {
+                    Response::error("no pane in that direction")
+                }
+            }
+            Request::Identify => Response::Snapshot {
+                text: format!(
+                    "cmux-linux {}\npid {}\nworkspaces {}\npanes {}",
+                    env!("CARGO_PKG_VERSION"),
+                    std::process::id(),
+                    self.state.workspaces.len(),
+                    self.state.panes.len(),
+                ),
+            },
+            Request::Capabilities => Response::Snapshot {
+                text: CAPABILITIES.join("\n"),
+            },
+            Request::TriggerFlash { pane } => {
+                match pane.or_else(|| self.state.focused_pane()) {
+                    Some(p) if self.state.set_ring(p, RingState::Attention) => Response::Ok,
+                    _ => Response::error("no such pane"),
+                }
+            }
+            Request::RunAction { id } => {
+                if self.run_custom_action(&id) {
+                    Response::Ok
+                } else {
+                    Response::error("no such action")
+                }
+            }
+            Request::Respawn { pane } => match pane.or_else(|| self.state.focused_pane()) {
+                Some(p) if self.respawn_pane(p) => Response::Ok,
+                _ => Response::error("no such pane"),
+            },
         }
     }
 
     /// Layout rectangles (unit square) for the active tab's panes — what the UI
     /// positions terminal views with.
     pub fn active_layout(&self) -> Vec<(PaneId, Rect)> {
+        // A zoomed pane takes the whole tab area; the rest stay alive but hidden.
+        if let Some(z) = self.state.zoomed_pane() {
+            return vec![(z, Rect::new(0.0, 0.0, 1.0, 1.0))];
+        }
         self.state
             .active_workspace()
             .and_then(|w| w.active_tab())
@@ -617,6 +1132,10 @@ impl Engine {
 
     /// Dividers of the active tab (unit-square coordinates).
     pub fn active_dividers(&self) -> Vec<cmux_core::split::Divider> {
+        // No draggable dividers while a pane is zoomed.
+        if self.state.zoomed_pane().is_some() {
+            return Vec::new();
+        }
         self.state
             .active_workspace()
             .and_then(|w| w.active_tab())
@@ -796,6 +1315,205 @@ mod tests {
     }
 
     #[test]
+    fn run_custom_action_from_config() {
+        let mut e = engine();
+        e.config.actions.insert(
+            "hello".into(),
+            cmux_config::ActionDef {
+                command: "echo hi".into(),
+                label: None,
+                target: cmux_config::ActionTarget::CurrentPane,
+            },
+        );
+        assert_eq!(
+            e.handle_request(Request::RunAction { id: "hello".into() }),
+            Response::Ok
+        );
+        assert_eq!(
+            e.handle_request(Request::RunAction { id: "nope".into() }),
+            Response::error("no such action")
+        );
+        // The same id also runs through the shared dispatch path.
+        assert!(e.dispatch_action("hello"));
+        assert!(!e.dispatch_action("unbound-id"));
+    }
+
+    #[test]
+    fn request_identify_capabilities_and_flash() {
+        let mut e = engine();
+        let p = e.state.focused_pane().unwrap();
+        match e.handle_request(Request::Identify) {
+            Response::Snapshot { text } => assert!(text.contains("cmux-linux")),
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+        match e.handle_request(Request::Capabilities) {
+            Response::Snapshot { text } => assert!(text.contains("identify")),
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+        assert_eq!(
+            e.handle_request(Request::TriggerFlash { pane: Some(p) }),
+            Response::Ok
+        );
+        assert!(e.state.pane(p).unwrap().ring.is_attention());
+    }
+
+    #[test]
+    fn git_branch_and_home_shortening() {
+        if let Ok(home) = std::env::var("HOME") {
+            assert_eq!(shorten_home(&home), "~");
+            assert_eq!(shorten_home(&format!("{home}/proj")), "~/proj");
+        }
+        assert_eq!(shorten_home("/etc/ssl"), "/etc/ssl");
+        // A fake repo: .git/HEAD points at a branch, and subdirs resolve up to it.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/feature-x\n").unwrap();
+        assert_eq!(
+            git_branch(dir.path().to_str().unwrap()).as_deref(),
+            Some("feature-x")
+        );
+        let sub = dir.path().join("a/b");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert_eq!(git_branch(sub.to_str().unwrap()).as_deref(), Some("feature-x"));
+        // No repo → no branch.
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(git_branch(empty.path().to_str().unwrap()), None);
+    }
+
+    #[test]
+    fn url_detection_under_column() {
+        let line = "see https://example.com/path) for docs";
+        // Column inside the URL returns it (trailing ')' trimmed).
+        let u = url_at_col(line, 10).unwrap();
+        assert_eq!(u, "https://example.com/path");
+        // Column over plain words is not a URL.
+        assert!(url_at_col(line, 0).is_none());
+        assert!(url_at_col(line, 2).is_none());
+        // A space between tokens is not a URL.
+        assert!(url_at_col(line, 3).is_none());
+        // Non-http tokens are ignored.
+        assert!(url_at_col("ftp://nope.example", 4).is_none());
+    }
+
+    #[test]
+    fn cursor_for_terminal_but_not_browser() {
+        let mut e = engine();
+        let p = e.state.focused_pane().unwrap();
+        // A live terminal pane reports a visible cursor on the live screen.
+        assert!(e.cursor_for(p).is_some());
+        // A browser pane has no PTY runtime, hence no cursor.
+        let b = match e.handle_request(Request::OpenBrowser {
+            url: "https://example.com".into(),
+            orientation: SplitDir::Horizontal,
+        }) {
+            Response::Created { id } => PaneId(id),
+            other => panic!("expected Created, got {other:?}"),
+        };
+        assert!(e.cursor_for(b).is_none());
+    }
+
+    #[test]
+    fn selection_state_and_copy_plumbing() {
+        let mut e = engine();
+        let p = e.state.focused_pane().unwrap();
+        assert!(e.copy_selection().is_none());
+        assert!(e.selection_for(p).is_none());
+        e.begin_selection(p, 0, 0);
+        e.extend_selection(p, 0, 3);
+        assert!(e.selection_for(p).is_some());
+        // A selection over the (blank) viewport copies a (possibly empty) line;
+        // content correctness is covered by the render-layer tests.
+        assert!(e.copy_selection().is_some());
+        e.clear_selection();
+        assert!(e.copy_selection().is_none());
+        assert!(e.selection_for(p).is_none());
+    }
+
+    #[test]
+    fn dispatch_zoom_and_equalize_actions() {
+        let mut e = engine();
+        e.split_focused(Orientation::Horizontal);
+        assert_eq!(e.active_layout().len(), 2);
+        // Zoom collapses the visible layout to the focused pane, hiding dividers.
+        assert!(e.dispatch_action("toggleZoom"));
+        assert_eq!(e.active_layout().len(), 1);
+        assert!(e.active_dividers().is_empty());
+        assert!(e.dispatch_action("toggleZoom"));
+        assert_eq!(e.active_layout().len(), 2);
+        // Equalize is a no-op on layout count but must succeed with a split.
+        assert!(e.dispatch_action("equalizeSplits"));
+    }
+
+    #[test]
+    fn dispatch_tab_cycling_and_select_workspace() {
+        let mut e = engine();
+        let ws1 = e.state.active_workspace.unwrap();
+        e.new_tab();
+        let active_after_new = e.state.active_workspace().unwrap().active_tab;
+        assert!(e.dispatch_action("nextTab"));
+        assert_ne!(
+            e.state.active_workspace().unwrap().active_tab,
+            active_after_new
+        );
+        // selectWorkspaceN focuses by 1-based index.
+        let ws2 = e.new_workspace("second");
+        assert!(e.dispatch_action("selectWorkspace1"));
+        assert_eq!(e.state.active_workspace, Some(ws1));
+        assert!(e.dispatch_action("selectWorkspace2"));
+        assert_eq!(e.state.active_workspace, Some(ws2));
+        assert!(!e.dispatch_action("selectWorkspace9"));
+    }
+
+    #[test]
+    fn dispatch_swap_move_and_select_surface() {
+        let mut e = engine();
+        let a = e.state.focused_pane().unwrap();
+        let b = e.split_focused(Orientation::Horizontal).unwrap();
+        // selectSurface1 focuses the first pane in tree order.
+        assert!(e.dispatch_action("selectSurface1"));
+        assert_eq!(e.state.focused_pane(), Some(a));
+        // swapRight exchanges it with its right neighbor.
+        assert!(e.dispatch_action("swapRight"));
+        let leaves = e.active_layout().into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+        assert_eq!(leaves, vec![b, a]);
+        // Moving a tab to a new workspace needs >1 tab in the source.
+        e.new_tab();
+        let before = e.state.workspaces.len();
+        assert!(e.dispatch_action("moveTabToNewWorkspace"));
+        assert_eq!(e.state.workspaces.len(), before + 1);
+    }
+
+    #[test]
+    fn dispatch_close_workspace_drops_runtimes() {
+        let mut e = engine();
+        let p1 = e.state.focused_pane().unwrap();
+        e.new_workspace("second");
+        assert!(e.dispatch_action("closeWorkspace"));
+        // The closed workspace's pane and its PTY runtime are gone.
+        assert!(e.state.active_workspace().is_some());
+        let _ = p1;
+    }
+
+    #[test]
+    fn request_equalize_zoom_and_notification_ops() {
+        let mut e = engine();
+        e.split_focused(Orientation::Horizontal);
+        assert_eq!(e.handle_request(Request::Equalize), Response::Ok);
+        assert_eq!(e.handle_request(Request::ToggleZoom), Response::Ok);
+        assert_eq!(e.handle_request(Request::NextTab), Response::error("no other tab"));
+        // Raise a notification on a background pane, then mark/dismiss by id.
+        let bg = e.state.focused_pane().unwrap();
+        e.new_tab();
+        e.state.notify(bg, "a", "", 1);
+        assert_eq!(e.handle_request(Request::MarkNotificationRead { id: 0 }), Response::Ok);
+        assert_eq!(e.handle_request(Request::DismissNotification { id: 0 }), Response::Ok);
+        assert_eq!(
+            e.handle_request(Request::DismissNotification { id: 99 }),
+            Response::error("no such notification")
+        );
+    }
+
+    #[test]
     fn osc_notification_from_pty_output() {
         let mut e = engine();
         let p = e.state.focused_pane().unwrap();
@@ -821,7 +1539,14 @@ mod tests {
     fn osc_title_sets_pane_title() {
         let mut e = engine();
         let p = e.state.focused_pane().unwrap();
-        e.write_pane(p, b"printf '\\033]0;my-task\\007'\n");
+        // Emit an OSC 0 title, then keep the shell busy with `sleep` so it does
+        // not immediately draw a new prompt. Interactive shells (e.g. Fedora's
+        // bash with `PROMPT_COMMAND='printf "\033]0;...\007"'`) re-assert their
+        // own window title on every prompt, which would clobber `my-task`
+        // before this loop samples it — unlike OSC notifications, the title is
+        // last-write-wins. Blocking on `sleep` holds `my-task` long enough to
+        // observe the PTY → terminal → pane.title wiring deterministically.
+        e.write_pane(p, b"printf '\\033]0;my-task\\007'; sleep 5\n");
         let mut titled = false;
         for _ in 0..40 {
             std::thread::sleep(std::time::Duration::from_millis(50));

@@ -18,17 +18,66 @@ pub struct StyledRun {
     pub text: String,
 }
 
-/// Coalesce a set of rows (a terminal viewport, possibly scrolled back) into
-/// styled runs for the webview.
-pub fn viewport_to_runs(rows: &[Vec<Cell>]) -> Vec<Vec<StyledRun>> {
-    rows.iter().map(|r| row_to_runs(r)).collect()
+/// A normalized text selection over a viewport, in (row, col) cell coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewportSelection {
+    pub start: (usize, usize),
+    pub end: (usize, usize),
 }
 
-fn row_to_runs(row: &[Cell]) -> Vec<StyledRun> {
+impl ViewportSelection {
+    /// Build from an anchor and the current point, normalizing reading order.
+    pub fn new(a: (usize, usize), b: (usize, usize)) -> Self {
+        let (start, end) = if a <= b { (a, b) } else { (b, a) };
+        Self { start, end }
+    }
+
+    /// Inclusive `(lo, hi)` selected columns for `row` of `width` cells, or
+    /// `None` if the row falls outside the selection.
+    pub fn cols_for_row(&self, row: usize, width: usize) -> Option<(usize, usize)> {
+        if width == 0 || row < self.start.0 || row > self.end.0 {
+            return None;
+        }
+        let last = width - 1;
+        let lo = if row == self.start.0 {
+            self.start.1.min(last)
+        } else {
+            0
+        };
+        let hi = if row == self.end.0 {
+            self.end.1.min(last)
+        } else {
+            last
+        };
+        Some((lo, hi))
+    }
+}
+
+/// Coalesce a set of rows (a terminal viewport, possibly scrolled back) into
+/// styled runs for the webview, tinting the cells covered by `sel` (if any).
+pub fn viewport_to_runs_sel(
+    rows: &[Vec<Cell>],
+    sel: Option<ViewportSelection>,
+) -> Vec<Vec<StyledRun>> {
+    rows.iter()
+        .enumerate()
+        .map(|(r, row)| {
+            let cols = sel.and_then(|s| s.cols_for_row(r, row.len()));
+            row_to_runs(row, cols)
+        })
+        .collect()
+}
+
+fn row_to_runs(row: &[Cell], sel_cols: Option<(usize, usize)>) -> Vec<StyledRun> {
     let mut runs: Vec<StyledRun> = Vec::new();
     let mut current_style: Option<String> = None;
-    for cell in row {
-        let style = cell_style(cell);
+    for (i, cell) in row.iter().enumerate() {
+        let mut style = cell_style(cell);
+        // A selected cell appends a selection background; the later CSS
+        // declaration wins, so this also overrides the cell's own background.
+        if sel_cols.map_or(false, |(lo, hi)| i >= lo && i <= hi) {
+            style.push_str("background-color:var(--sel-bg,#5b6078);");
+        }
         let ch = if cell.c == '\0' { ' ' } else { cell.c };
         match (&current_style, runs.last_mut()) {
             (Some(s), Some(last)) if *s == style => last.text.push(ch),
@@ -155,7 +204,7 @@ mod tests {
     fn runs_coalesce_same_style() {
         let mut term = Terminal::new(1, 10);
         term.feed(b"hello");
-        let runs = viewport_to_runs(&term.viewport(0));
+        let runs = viewport_to_runs_sel(&term.viewport(0), None);
         assert_eq!(runs.len(), 1);
         // "hello" + trailing blanks: all default style, so it should coalesce
         // into a single run beginning with "hello".
@@ -163,10 +212,40 @@ mod tests {
     }
 
     #[test]
+    fn selection_cols_per_row() {
+        let s = ViewportSelection::new((0, 2), (2, 4));
+        // First row: from anchor col to end of line.
+        assert_eq!(s.cols_for_row(0, 10), Some((2, 9)));
+        // Middle row: whole line.
+        assert_eq!(s.cols_for_row(1, 10), Some((0, 9)));
+        // Last row: start of line to active col.
+        assert_eq!(s.cols_for_row(2, 10), Some((0, 4)));
+        // Outside the selection.
+        assert_eq!(s.cols_for_row(3, 10), None);
+        // Single-row selection is the inclusive column span.
+        let one = ViewportSelection::new((1, 5), (1, 2));
+        assert_eq!(one.cols_for_row(1, 10), Some((2, 5)));
+    }
+
+    #[test]
+    fn selection_tints_runs() {
+        let mut term = Terminal::new(1, 6);
+        term.feed(b"abcdef");
+        let sel = ViewportSelection::new((0, 1), (0, 3));
+        let runs = viewport_to_runs_sel(&term.viewport(0), Some(sel));
+        let joined: String = runs[0].iter().map(|r| r.text.clone()).collect();
+        assert_eq!(joined, "abcdef");
+        // The selected middle cells carry the selection background.
+        assert!(runs[0].iter().any(|r| r.style.contains("--sel-bg")));
+        // Unselected cells exist too (the selection split the row).
+        assert!(runs[0].iter().any(|r| !r.style.contains("--sel-bg")));
+    }
+
+    #[test]
     fn color_change_splits_runs() {
         let mut term = Terminal::new(1, 10);
         term.feed(b"a\x1b[31mb");
-        let runs = viewport_to_runs(&term.viewport(0));
+        let runs = viewport_to_runs_sel(&term.viewport(0), None);
         // 'a' default, then red 'b' (then blanks) — at least two runs.
         assert!(runs[0].len() >= 2);
         assert!(runs[0][0].text.starts_with('a'));
